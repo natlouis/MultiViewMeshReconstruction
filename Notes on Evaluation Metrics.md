@@ -1,4 +1,5 @@
 ## Metrics
+It's worth noting that we could display model results on the dataset as a whole, or present results per-category, which could potentially provide insight on how the agent makes decisions.
 1. __Total Distance Traveled__
 * Want to discretize our viewpoint sphere enough so that it reduces redundancy between adjacent views
 * Want to provide agent enough viewpoints to choose from to not constrain freedom of movement too much - don't want all Distance-Traveled scores to be very similar values in the end
