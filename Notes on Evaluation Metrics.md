@@ -10,15 +10,15 @@ It's worth noting that we could display model results on the dataset as a whole,
 * _Characteristics_: Not suitable for point clouds, high values can be misleading for solid-interior objects
 
 3. __F-Score__
-* Takes into account accuracy of and completeness of reconstruction
-* Strictness controlled by varying threshold _d_
+* Defined only for point-clouds
+* Takes into account accuracy of and completeness of reconstruction - strictness controlled by varying threshold _d_
 * https://lmb.informatik.uni-freiburg.de/Publications/2019/TB19/paper-s3d.pdf indicates F-Score much better indicator of prediction quality
 * Working example in lines 209-229 in https://github.com/facebookresearch/meshrcnn/blob/1c8cbad1bc9a196f2e4fc0a80be6c12c35f1d1e3/meshrcnn/utils/metrics.py
 * Working examples #2 at https://github.com/lmb-freiburg/what3d/blob/master/eval.py
 * Mesh R-CNN evaluated F-Score at 3 different thresholds: https://github.com/facebookresearch/meshrcnn/blob/89b59e6df2eb09b8798eae16e204f75bb8dc92a7/INSTRUCTIONS_SHAPENET.md
 
 4. __Chamfer Distance__
-* Defined for meshes, point-clouds, and (maybe??) voxels
+* Defined only for point-clouds
 * Used as a loss function for mesh-based objects in PyTorch3D Tutorial: https://pytorch3d.org/tutorials/deform_source_mesh_to_target_mesh
 * Seems easy to implement: Working example in Mesh R-CNN repo (lines 156-205): https://github.com/facebookresearch/meshrcnn/blob/1c8cbad1bc9a196f2e4fc0a80be6c12c35f1d1e3/meshrcnn/utils/metrics.py
 * _Characteristics_: Sensitive to outliers
