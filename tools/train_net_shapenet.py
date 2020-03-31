@@ -264,7 +264,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
 
     if comm.is_main_process():
         logger.info("Evaluating on test set:")
-        test_loader = build_data_loader(cfg, "MeshVox", "test", multigpu=False)
+        test_loader = build_data_loader(cfg, "MeshVox", "test", multigpu=False, num_workers=0)
         evaluate_test(model, test_loader)
 
 
@@ -314,16 +314,16 @@ def eval_and_save(model, loaders, optimizer, scheduler, cp):
 def setup_loaders(cfg):
     loaders = {}
     loaders["train"] = build_data_loader(
-        cfg, "MeshVox", "train", multigpu=comm.get_world_size() > 1
+        cfg, "MeshVox", "train", multigpu=comm.get_world_size() > 1, num_workers=0
     )
 
     # Since sampling the mesh is now coupled with the data loader, we need to
     # make two different Dataset / DataLoaders for the training set: one for
     # training which uses precomputd samples, and one for evaluation which uses
     # more samples and computes them on the fly. This is sort of gross.
-    loaders["train_eval"] = build_data_loader(cfg, "MeshVox", "train_eval", multigpu=False)
+    loaders["train_eval"] = build_data_loader(cfg, "MeshVox", "train_eval", multigpu=False, num_workers=0)
 
-    loaders["val"] = build_data_loader(cfg, "MeshVox", "val", multigpu=False)
+    loaders["val"] = build_data_loader(cfg, "MeshVox", "val", multigpu=False, num_workers=0)
     return loaders
 
 

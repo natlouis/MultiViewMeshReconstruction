@@ -153,30 +153,39 @@ def main(args):
 def handle_model(args, sid, mid, i, N):
     if (i + 1) % args.print_every == 0:
         logger.info("  Handling model %d / %d" % (i + 1, N))
-    shapenet_dir = os.path.join(args.shapenet_dir, sid, mid)
-    binvox_dir = os.path.join(args.shapenet_binvox_dir, sid, mid)
+    shapenet_dir = os.path.join(args.shapenet_dir, sid, mid, 'models')
+    binvox_dir = os.path.join(args.shapenet_binvox_dir, sid, mid, 'models')
     r2n2_dir = os.path.join(args.r2n2_dir, sid, mid, "rendering")
     output_dir = os.path.join(args.output_dir, sid, mid)
 
-    obj_path = os.path.join(shapenet_dir, "model.obj")
+    obj_path = os.path.join(shapenet_dir, "model_normalized.obj")
     if not os.path.isfile(obj_path):
         logger.info("WARNING: Skipping %s/%s, no .obj" % (sid, mid))
         return None
-    # Some ShapeNet textures are corrupt. Since we don't need them,
-    # avoid loading textures altogether.
-    mesh = load_obj(obj_path, load_textures=False)
-    verts = mesh[0]
-    faces = mesh[1].verts_idx
 
-    # WARNING: Here we hardcode the assumption that the input voxels are
-    # 128 x 128 x 128.
-    voxel_path = os.path.join(binvox_dir, "model.presolid.binvox")
-    if not os.path.isfile(voxel_path):
-        logger.info("WARNING: Skipping %s/%s, no voxels" % (sid, mid))
-        return None
-    with open(voxel_path, "rb") as f:
-        # Read voxel coordinates as a tensor of shape (N, 3)
-        voxel_coords = read_binvox_coords(f)
+    try:
+        # Some ShapeNet textures are corrupt. Since we don't need them,
+        # avoid loading textures altogether.
+        mesh = load_obj(obj_path, load_textures=False)
+        verts = mesh[0]
+        faces = mesh[1].verts_idx
+
+        # WARNING: Here we hardcode the assumption that the input voxels are
+        # 128 x 128 x 128.
+        voxel_path = os.path.join(binvox_dir, "model_normalized.surface.binvox")
+        if not os.path.isfile(voxel_path):
+            logger.info("WARNING: Skipping %s/%s, no voxels" % (sid, mid))
+            return None
+        with open(voxel_path, "rb") as f:
+            # Read voxel coordinates as a tensor of shape (N, 3)
+            try:
+                voxel_coords = read_binvox_coords(f)
+            except IndexError:
+                logger.info("WARNING: Skipping %s/%s, voxel file empty" % (sid, mid))
+                return None 
+    except BaseException as e:
+        logger.info("ERROR: Skipping %s/%s" % (sid, mid))
+        print('An exception occured: {}'.format(e))
 
     if not os.path.isdir(r2n2_dir):
         logger.info("WARNING: Skipping %s/%s, no images" % (sid, mid))
