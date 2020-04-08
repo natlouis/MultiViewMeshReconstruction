@@ -47,7 +47,7 @@ def main_worker_eval(worker_id, args):
     cfg = setup(args)
 
     # build test set
-    test_loader = build_data_loader(cfg, "MeshVox", "test", multigpu=False)
+    test_loader = build_data_loader(cfg, "MeshVox", "test", multigpu=False, num_workers=0)
     logger.info("test - %d" % len(test_loader))
 
     # load checkpoing and build model
