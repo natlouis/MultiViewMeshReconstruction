@@ -8,8 +8,6 @@ Created on Sat Mar 17 17:04:59 2018
 
 import numpy as np
 
-from r2n2_lib.config import cfg
-
 import collections
 
 import torch
@@ -59,8 +57,9 @@ class BN_FCConv3DLayer_torch(nn.Module):
         
         #define the recurrent batch normalization layers
         #input channels is the output channels of FCConv3DLayer_torch and T_max is the maximum number of views
-        self.bn1 = Recurrent_BatchNorm3d(num_features = filter_shape[0], T_max = cfg.CONST.N_VIEWS)
-        self.bn2 = Recurrent_BatchNorm3d(num_features = filter_shape[0], T_max = cfg.CONST.N_VIEWS)
+        N_VIEWS = 5
+        self.bn1 = Recurrent_BatchNorm3d(num_features = filter_shape[0], T_max = N_VIEWS)
+        self.bn2 = Recurrent_BatchNorm3d(num_features = filter_shape[0], T_max = N_VIEWS)
         
         #define a bias term and initialize it to 0.1
         self.bias = nn.Parameter(torch.FloatTensor(1, output_shape[1], 1, 1, 1).fill_(0.1))

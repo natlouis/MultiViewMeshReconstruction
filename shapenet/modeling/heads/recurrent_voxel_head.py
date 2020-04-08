@@ -5,13 +5,13 @@ from detectron2.layers import Conv2d, ConvTranspose2d, get_norm
 from torch import nn
 from torch.nn import functional as F
 
-from r2n2_lib.config import cfg
+from torch.nn import Linear, LeakyReLU, Sigmoid, Tanh
 from r2n2_lib.layers import FCConv3DLayer_torch, Unpool3DLayer, \
                        SoftmaxWithLoss3D, BN_FCConv3DLayer_torch
 
-class VoxelHead(nn.Module):
+class RecurrentVoxelHead(nn.Module):
     def __init__(self, cfg):
-        super(VoxelHead, self).__init__()
+        super(RecurrentVoxelHead, self).__init__()
 
         # fmt: off
         self.voxel_size = cfg.MODEL.VOXEL_HEAD.VOXEL_SIZE #48
@@ -87,12 +87,44 @@ class VoxelHead(nn.Module):
         #TODO: Pass each feature through the recurrent layer and update the GRU state
 
         V = self.voxel_size
+
+        '''
         x = F.interpolate(x, size=V // 2, mode="bilinear", align_corners=False)
         for layer in self.conv_norm_relus:
             x = layer(x)
+        '''
+
+        #initialize the hidden state and update gate
+        h = self.initHidden(self.h_shape)
+        u = self.initHidden(self.h_shape)
+
+        #a list used to store intermediate update gate activations
+        u_list = []
+
+        """
+        x is the input and the size of x is (num_views, batch_size, feature_size).
+        h and u is the hidden state and activation of last time step respectively.
+        The following loop computes the forward pass of the whole network. 
+        """
+        for time in range(x.size(0)):
+            gru_out, update_gate = self.recurrent_layer(x[time], h, u, time)
+            
+            h = gru_out
+            
+            u = update_gate
+            #u_list.append(u)
+        
+        x = h
+
         x = F.relu(self.deconv(x))
         x = self.predictor(x)
         return x
+
+    def initHidden(self, h_shape):
+        h = torch.zeros(h_shape)
+        if torch.cuda.is_available():
+            h = h.type(torch.cuda.FloatTensor)
+        return h
 
 class recurrent_layer(nn.Module):
     def __init__(self, input_shape, input_channels, \
@@ -126,9 +158,9 @@ class recurrent_layer(nn.Module):
         This function defines the forward pass of the recurrent layer of the network.
         """
 
-        pool6 = pool6.view(x.size(0), -1) #flatten output from encoder
+        x = x.view(x.size(0), -1) #flatten output from encoder
 
-        fc7 = self.fc7(pool6)
+        fc7 = self.fc7(x)
         rect7 = self.leaky_relu(fc7)
         
         t_x_s_update = self.t_x_s_update(rect7, h, time)
