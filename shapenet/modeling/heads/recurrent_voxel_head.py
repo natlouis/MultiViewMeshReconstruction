@@ -39,12 +39,24 @@ class RecurrentVoxelHead(nn.Module):
         self.input_shape  = None #unused 
         self.n_gru_vox    = 4
         self.n_fc_filters = [1024] #the filter shape of the 3d convolutional gru unit
-        self.h_shape      = (self.batch_size, 256, self.n_gru_vox, self.n_gru_vox, self.n_gru_vox) #the size of the hidden state
-        self.conv3d_filter_shape = (conv_dims, conv_dims, 3, 3, 3) #the filter shape of the 3d convolutional gru unit
+        self.n_h_feat  = 128 #number of features for output tensor
+
+        self.h_shape      = (self.batch_size, self.n_h_feat, self.n_gru_vox, self.n_gru_vox, self.n_gru_vox) #the size of the hidden state
+        self.conv3d_filter_shape = (self.n_h_feat, self.n_h_feat, 3, 3, 3) #the filter shape of the 3d convolutional gru unit
 
         self.recurrent_layer = recurrent_layer(self.input_shape, input_channels, \
                                  self.n_fc_filters, self.h_shape, self.conv3d_filter_shape)
 
+        self.reduce_dim = Conv2d(
+                self.n_h_feat*self.n_gru_vox,
+                conv_dims,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                bias=not self.norm,
+                norm=get_norm(self.norm, conv_dims),
+                activation=F.relu,
+            )
         '''
         for k in range(num_conv):
             conv = Conv2d(
@@ -82,10 +94,6 @@ class RecurrentVoxelHead(nn.Module):
             nn.init.constant_(self.predictor.bias, 0)
 
     def forward(self, x):
-        #TODO: Need x to be a list of features one for each view
-
-        #TODO: Pass each feature through the recurrent layer and update the GRU state
-
         V = self.voxel_size
 
         '''
@@ -106,6 +114,9 @@ class RecurrentVoxelHead(nn.Module):
         h and u is the hidden state and activation of last time step respectively.
         The following loop computes the forward pass of the whole network. 
         """
+        #TODO: Need x to be a list of features one for each view
+        x = x.unsqueeze(0) #NOTE: Temporarily add single time dimension
+
         for time in range(x.size(0)):
             gru_out, update_gate = self.recurrent_layer(x[time], h, u, time)
             
@@ -115,6 +126,23 @@ class RecurrentVoxelHead(nn.Module):
             #u_list.append(u)
         
         x = h
+
+        '''
+        R2N2 outputs a 5-D tensor: (batch_size, z, f/g, x, y)
+        z,x,y serve as the occupancy probabilities for each grid position, and 
+        f/g is whether that occupancy belongs to foreground or background.
+        
+        MeshRCNN doesn't output f/g, just occupancy prob on for all grid positions.
+        This means that creating a 3D convolutional LSTM in R2N2 could've been unnecessary.
+
+        - Nate 
+        ''' 
+        #Flatten from 5-D to 4-D.
+        x = x.flatten(1,2) 
+
+        #Linearly interpolate spatial dimension to 24 x 24
+        x = F.interpolate(x, size=V // 2, mode="bilinear", align_corners=False)
+        x = self.reduce_dim(x)
 
         x = F.relu(self.deconv(x))
         x = self.predictor(x)
