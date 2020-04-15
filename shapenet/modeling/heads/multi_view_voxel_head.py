@@ -10,7 +10,7 @@ from shapenet.modeling.models.decoder import Decoder
 from shapenet.modeling.models.merger import Merger
 ##
 
-class VoxelHead(nn.Module):
+class MultiViewVoxelHead(nn.Module):
     def __init__(self, cfg):
         super(VoxelHead, self).__init__()
 
