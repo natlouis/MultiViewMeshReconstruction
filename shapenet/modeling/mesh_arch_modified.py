@@ -52,7 +52,6 @@ class VoxMeshHead(nn.Module):
         voxel_probs = voxel_scores.sigmoid()
         active_voxels = voxel_probs > self.cubify_threshold
         voxels_per_mesh = (active_voxels.view(N, -1).sum(dim=1)).tolist()
-        #???
         start = V // 4
         stop = start + V // 2
         for i in range(N):
