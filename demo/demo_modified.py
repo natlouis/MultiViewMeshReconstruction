@@ -84,7 +84,8 @@ if __name__ == "__main__":
         cfg, output_dir=output_dir
     )
 
-    data_dir = './datasets/shapenet/ShapeNetV1processed'
+#     data_dir = './datasets/shapenet/ShapeNetV1processed'
+    data_dir = args.data_dir
     dataset = MeshVoxDataset(data_dir)
 
     #Randomly select an image from the ShapeNet dataset if index args is empty
