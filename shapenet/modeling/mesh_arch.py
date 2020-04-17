@@ -7,7 +7,7 @@ from pytorch3d.structures import Meshes
 from pytorch3d.utils import ico_sphere
 
 from shapenet.modeling.backbone import build_backbone
-from shapenet.modeling.heads import MeshRefinementHead, VoxelHead, RecurrentVoxelHead
+from shapenet.modeling.heads import MeshRefinementHead, VoxelHead
 from shapenet.utils.coords import get_blender_intrinsic_matrix, voxel_to_world
 
 MESH_ARCH_REGISTRY = Registry("MESH_ARCH")
@@ -29,8 +29,7 @@ class VoxMeshHead(nn.Module):
         self.backbone, feat_dims = build_backbone(backbone)
         # voxel head
         cfg.MODEL.VOXEL_HEAD.COMPUTED_INPUT_CHANNELS = feat_dims[-1]
-        #self.voxel_head = VoxelHead(cfg)
-        self.voxel_head = RecurrentVoxelHead(cfg)
+        self.voxel_head = VoxelHead(cfg)
         # mesh head
         cfg.MODEL.MESH_HEAD.COMPUTED_INPUT_CHANNELS = sum(feat_dims)
         self.mesh_head = MeshRefinementHead(cfg)
