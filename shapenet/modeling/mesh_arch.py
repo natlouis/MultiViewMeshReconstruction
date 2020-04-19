@@ -159,5 +159,4 @@ class Pixel2MeshHead(nn.Module):
 
 def build_model(cfg):
     name = cfg.MODEL.MESH_HEAD.NAME
-    print('Stop here')
     return MESH_ARCH_REGISTRY.get(name)(cfg)

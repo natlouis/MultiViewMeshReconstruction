@@ -51,13 +51,20 @@ def evaluate_test(model, data_loader, vis_preds=False):
     num_batch_evaluated = 0
     for batch in data_loader:
         batch = data_loader.postprocess(batch, device)
-        imgs, meshes_gt, _, _, _, id_strs = batch
+        imgs, meshes_gt, _, _, _, id_strs, _imgs = batch
+
+        #NOTE: _imgs contains all of the other images in belonging to this model
+        #We have to select the next-best-view from that list of images
+
         sids = [id_str.split("-")[0] for id_str in id_strs]
         for sid in sids:
             num_instances[sid] += 1
 
         with inference_context(model):
             voxel_scores, meshes_pred = model(imgs)
+
+            #TODO: Render masks from predicted mesh for each view
+
             cur_metrics = compare_meshes(meshes_pred[-1], meshes_gt, reduce=False)
             cur_metrics["verts_per_mesh"] = meshes_pred[-1].num_verts_per_mesh().cpu()
             cur_metrics["faces_per_mesh"] = meshes_pred[-1].num_faces_per_mesh().cpu()
