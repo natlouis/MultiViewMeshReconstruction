@@ -75,7 +75,6 @@ class VoxMeshHead(nn.Module):
         return Meshes(verts=verts_list, faces=faces_list)
 
     def forward(self, imgs, voxel_only=False):
-        self.voxel_head = VoxelHead(cfg)
         N = imgs.shape[0]
         device = imgs.device
 

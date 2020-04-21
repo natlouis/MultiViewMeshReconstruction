@@ -153,7 +153,8 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             else:
                 iteration_timer.tick()
             batch = loaders["train"].postprocess(batch, device)
-            imgs, meshes_gt, points_gt, normals_gt, voxels_gt, _imgs = batch
+            #imgs, meshes_gt, points_gt, normals_gt, voxels_gt, _imgs = batch
+            imgs, meshes_gt, points_gt, normals_gt, voxels_gt = batch
 
             #NOTE: _imgs contains all of the other images in belonging to this model
             #We have to select the next-best-view from that list of images

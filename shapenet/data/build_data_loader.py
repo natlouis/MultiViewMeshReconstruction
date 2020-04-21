@@ -49,6 +49,17 @@ def build_data_loader(
 
     logger.info('Building dataset for split "%s"' % split_name)
     if dataset == "MeshVox":
+        dset = MeshVoxDataset(
+            cfg.DATASETS.DATA_DIR,
+            split=split,
+            num_samples=cfg.MODEL.MESH_HEAD.GT_NUM_SAMPLES,
+            voxel_size=cfg.MODEL.VOXEL_HEAD.VOXEL_SIZE,
+            return_mesh=return_mesh,
+            sample_online=sample_online,
+            return_id_str=return_id_str,
+        )
+        collate_fn = MeshVoxDataset.collate_fn
+    elif dataset == "MeshVoxMulti":
         dset = MeshVoxMultiDataset(
             cfg.DATASETS.DATA_DIR,
             split=split,
