@@ -29,7 +29,7 @@ class MultiViewVoxelHead(nn.Module):
         
     def forward(self, x):
         # x  torch.Size([batch_size, n_views, img_c, img_h, img_w])(_,_,3,224,224)
-        feats, static_feats = self.encoder(x)
+        feats, static_feats, feat_dims = self.encoder(x)
         # feats  torch.Size([batch_size, n_views, 256, 8, 8])
         # static_feats: a list
         raw_features, coarse_volumes = self.decoder(feats)
@@ -37,4 +37,4 @@ class MultiViewVoxelHead(nn.Module):
         # coarse_volumes   torch.Size([batch_size, n_views, 32, 32, 32])
         coarse_volumes = self.merger(raw_features, coarse_volumes)
         # coarse_volumes  torch.Size([batch_size, 32, 32, 32])
-        return coarse_volumes, static_feats
+        return coarse_volumes, static_feats, feat_dims
