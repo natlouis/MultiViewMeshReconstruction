@@ -89,8 +89,8 @@ class Encoder(torch.nn.Module):
         feats3_max = torch.max(feats3, 1, True)[0].squeeze()
         
         static_features = [feats1_mean, feats1_std, feats1_max, feats2_mean, feats2_std, feats2_max, feats3_mean, feats3_std, feats3_max] 
-        feat_dim = [64,64,64,128,128,128,256,256,256]
-        return image_features, static_features,feat_dim
+        feat_dims = [64,64,64,128,128,128,256,256,256]
+        return image_features, static_features,feat_dims
   
     
     
