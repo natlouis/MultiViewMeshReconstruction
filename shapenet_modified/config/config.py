@@ -35,7 +35,10 @@ def get_shapenet_cfg():
     cfg.MODEL.VOXEL_HEAD.CUBIFY_THRESH = 0.0
     # voxel only iterations
     cfg.MODEL.VOXEL_HEAD.VOXEL_ONLY_ITERS = 100
-
+##
+    cfg.MODEL.VOXEL_HEAD.TCONV_USE_BIAS = False
+    cfg.MODEL.VOXEL_HEAD.LEAKY_VALUE = 0.2 
+##    
     # ------------------------------------------------------------------------ #
     # Mesh Head
     # ------------------------------------------------------------------------ #
