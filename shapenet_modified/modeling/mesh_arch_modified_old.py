@@ -7,10 +7,13 @@ from pytorch3d.structures import Meshes
 from pytorch3d.utils import ico_sphere
 
 # from shapenet.modeling.backbone import build_backbone
-# from shapenet.modeling.heads import MeshRefinementHead, MultiViewVoxelHead
 from shapenet.modeling.heads import MeshRefinementHead
-from shapenet.modeling.heads.multi_view_voxel_head import VoxelHead
 from shapenet.utils.coords import get_blender_intrinsic_matrix, voxel_to_world
+###
+from shapenet.modeling.models.encoder import Encoder
+from shapenet.modeling.models.decoder import Decoder
+from shapenet.modeling.models.merger import Merger
+###
 
 MESH_ARCH_REGISTRY = Registry("MESH_ARCH")
 
@@ -28,18 +31,17 @@ class VoxMeshHead(nn.Module):
 
         self.register_buffer("K", get_blender_intrinsic_matrix())
         # backbone
-#         self.backbone, feat_dims = build_backbone(backbone)
+        self.backbone, feat_dims = build_backbone(backbone)
         # voxel head
 #         cfg.MODEL.VOXEL_HEAD.COMPUTED_INPUT_CHANNELS = feat_dims[-1]
 #         self.voxel_head = VoxelHead(cfg)
-        self.voxel_head = VoxelHead(cfg)
-    
+###
+        self.encoder = Encoder(cfg)
+        self.decoder = Decoder(cfg)
+        self.merger = Merger(cfg)
+###       
         # mesh head
-        
-#       can further refine this part
-        feat_dims = (64,64,64,128,128,128,256,256,256)
         cfg.MODEL.MESH_HEAD.COMPUTED_INPUT_CHANNELS = sum(feat_dims)
-        
         self.mesh_head = MeshRefinementHead(cfg)
 
     def _get_projection_matrix(self, N, device):
@@ -61,11 +63,9 @@ class VoxMeshHead(nn.Module):
         start = V // 4
         stop = start + V // 2
         for i in range(N):
-            if voxels_per_mesh[i] == 0:
-                print('ERROR is here')
+            if voxels_per_mesh[i] == 0:                
                 voxel_probs[i, start:stop, start:stop, start:stop] = 1
         meshes = cubify(voxel_probs, self.cubify_threshold)
-
         meshes = self._add_dummies(meshes)
         meshes = voxel_to_world(meshes)
         return meshes
@@ -84,18 +84,19 @@ class VoxMeshHead(nn.Module):
         return Meshes(verts=verts_list, faces=faces_list)
 
     def forward(self, imgs, voxel_only=False):
-        # imgs torch.Size([batch_size, n_views, img_c, img_h, img_w])(_,_,3,224,224)
+#         imgs.size()  -->  torch.Size([batch_size, n_views, img_c, img_h, img_w])
         N = imgs.shape[0]
         device = imgs.device
 
 #         img_feats = self.backbone(imgs)
+        img_feats = self.encoder(imgs)
+#         img_feats.size() --> torch.Size([batch_size, n_views, 256, 8, 8])
 
 #         voxel_scores = self.voxel_head(img_feats[-1])
-
-        voxel_scores, static_feats = self.voxel_head(imgs)
-#         print(static_feats[0].shape)
-        # voxel_scores  torch.Size([batch_size, 32, 32, 32])
-        # static_feats: a list 
+        raw_features, gen_volumes = self.decoder(img_feats)
+#         gen_volumes.size() --> torch.Size([batch_size, n_views, 32, 32, 32])
+#         raw_features.size() --> torch.Size([batch_size, n_views, 9, 32, 32, 32])
+        gen_volumes = self.merger(raw_features, gen_volumes)
         
         P = self._get_projection_matrix(N, device)
 
@@ -105,75 +106,8 @@ class VoxMeshHead(nn.Module):
             return voxel_scores, dummy_refined
 
         cubified_meshes = self.cubify(voxel_scores)
-        
-#         refined_meshes = self.mesh_head(img_feats, cubified_meshes, P)
-        refined_meshes = self.mesh_head(static_feats, cubified_meshes, P)
+        refined_meshes = self.mesh_head(img_feats, cubified_meshes, P)
         return voxel_scores, refined_meshes
-
-
-@MESH_ARCH_REGISTRY.register()
-class SphereInitHead(nn.Module):
-    def __init__(self, cfg):
-        super(SphereInitHead, self).__init__()
-
-        # fmt: off
-        backbone                = cfg.MODEL.BACKBONE
-        self.ico_sphere_level   = cfg.MODEL.MESH_HEAD.ICO_SPHERE_LEVEL
-        # fmt: on
-
-        self.register_buffer("K", get_blender_intrinsic_matrix())
-        # backbone
-        self.backbone, feat_dims = build_backbone(backbone)
-        # mesh head
-        cfg.MODEL.MESH_HEAD.COMPUTED_INPUT_CHANNELS = sum(feat_dims)
-        self.mesh_head = MeshRefinementHead(cfg)
-
-    def _get_projection_matrix(self, N, device):
-        return self.K[None].repeat(N, 1, 1).to(device).detach()
-
-    def forward(self, imgs):
-        N = imgs.shape[0]
-        device = imgs.device
-
-        img_feats = self.backbone(imgs)
-        P = self._get_projection_matrix(N, device)
-
-        init_meshes = ico_sphere(self.ico_sphere_level, device).extend(N)
-        refined_meshes = self.mesh_head(img_feats, init_meshes, P)
-        return None, refined_meshes
-
-
-@MESH_ARCH_REGISTRY.register()
-class Pixel2MeshHead(nn.Module):
-    def __init__(self, cfg):
-        super(Pixel2MeshHead, self).__init__()
-
-        # fmt: off
-        backbone                = cfg.MODEL.BACKBONE
-        self.ico_sphere_level   = cfg.MODEL.MESH_HEAD.ICO_SPHERE_LEVEL
-        # fmt: on
-
-        self.register_buffer("K", get_blender_intrinsic_matrix())
-        # backbone
-        self.backbone, feat_dims = build_backbone(backbone)
-        # mesh head
-        cfg.MODEL.MESH_HEAD.COMPUTED_INPUT_CHANNELS = sum(feat_dims)
-        self.mesh_head = MeshRefinementHead(cfg)
-
-    def _get_projection_matrix(self, N, device):
-        return self.K[None].repeat(N, 1, 1).to(device).detach()
-
-    def forward(self, imgs):
-        N = imgs.shape[0]
-        device = imgs.device
-
-        img_feats = self.backbone(imgs)
-        P = self._get_projection_matrix(N, device)
-
-        init_meshes = ico_sphere(self.ico_sphere_level, device).extend(N)
-        refined_meshes = self.mesh_head(img_feats, init_meshes, P, subdivide=True)
-        return None, refined_meshes
-
 
 def build_model(cfg):
     name = cfg.MODEL.MESH_HEAD.NAME

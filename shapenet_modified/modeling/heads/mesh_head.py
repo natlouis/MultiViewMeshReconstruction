@@ -109,6 +109,8 @@ class MeshRefinementStage(nn.Module):
         factor = torch.tensor([1, -1, 1], device=device, dtype=dtype).view(1, 1, 3)
         vert_pos_padded = vert_pos_padded * factor
         # Get features from the image
+#         print(img_feats[0].shape)
+#         print(vert_pos_padded.shape)
         vert_align_feats = vert_align(img_feats, vert_pos_padded)
         vert_align_feats = _padded_to_packed(vert_align_feats, verts_padded_to_packed_idx)
         vert_align_feats = F.relu(self.bottleneck(vert_align_feats))
