@@ -8,6 +8,7 @@ from pytorch3d.structures import Meshes
 from torch.utils.data import Dataset
 
 import torchvision.transforms as T
+
 from PIL import Image
 from shapenet.data.utils import imagenet_preprocess
 from shapenet.utils.coords import SHAPENET_MAX_ZMAX, SHAPENET_MIN_ZMIN, project_verts
@@ -44,9 +45,8 @@ class MeshVoxDataset(Dataset):
 
         self.synset_ids = []
         self.model_ids = []
-        self.image_ids = []
+#         self.image_ids = []
         self.mid_to_samples = {}
-        self.mid_to_idx = {} #each entry holds a list of indices that belong to that model
 
 #         transform = [T.ToTensor()]
 #         if normalize_images:
@@ -80,15 +80,12 @@ class MeshVoxDataset(Dataset):
                         samples_path = os.path.join(data_dir, sid, mid, "samples.pt")
                         samples = torch.load(samples_path)
                         self.mid_to_samples[mid] = samples
-
-                    self.mid_to_idx[mid] = []
+                        
                     for iid in range(num_imgs):
                         if allowed_iids is None or iid in allowed_iids:
                             self.synset_ids.append(sid)
                             self.model_ids.append(mid)
                             self.image_ids.append(iid)
-                            self.mid_to_idx[mid].append(len(self.image_ids)-1)
-                            
 
     def __len__(self):
         return len(self.synset_ids)
@@ -102,30 +99,34 @@ class MeshVoxDataset(Dataset):
         metadata_path = os.path.join(self.data_dir, sid, mid, "metadata.pt")
         metadata = torch.load(metadata_path)
         K = metadata["intrinsic"]
-        RT = metadata["extrinsics"][iid]
-        img_path = metadata["image_list"][iid]
-        img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
+#         RT = metadata["extrinsics"][iid]
 
-        # Load the image
-        with open(img_path, "rb") as f:
-            img = Image.open(f).convert("RGB")
-        img = self.transform(img)
-
-        # All images for this model
+###
+        # RT needs to be checked later
+        RT = metadata["extrinsics"][0]
+        img_dir = os.path.join(self.data_dir, sid, mid, "images")
+        img_list = os.listdir(img_dir)
         # CAN add a variable to control the number of images
-        _iids = [self.image_ids[i] for i in self.mid_to_idx[mid]]
-        _imgs = []
-        for _iid in _iids:
-            img_path = metadata["image_list"][iid]
-            img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
-
+        imgs = []
+        # Load the image
+        for img_name in img_list:
+            img_path = os.path.join(img_dir,img_name)
             with open(img_path, "rb") as f:
-                _img = Image.open(f).convert("RGB")
-            _imgs.append(self.transform(_img))
-        _imgs = torch.stack(_imgs)
-        # tensor([N,3,224,224])
-        
-        
+                img = Image.open(f).convert("RGB")
+            img = self.transform(img)
+            imgs.append(img)
+        imgs = torch.stack(imgs)
+        # tensor([N,3,224,224])       
+###
+
+#         img_path = metadata["image_list"][iid]
+#         img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
+
+#         # Load the image
+#         with open(img_path, "rb") as f:
+#             img = Image.open(f).convert("RGB")
+#         img = self.transform(img)
+
         # Maybe read mesh
         verts, faces = None, None
         if self.return_mesh:
@@ -153,7 +154,8 @@ class MeshVoxDataset(Dataset):
         if self.voxel_size > 0:
             # Use precomputed voxels if we have them, otherwise return voxel_coords
             # and we will compute voxels in postprocess
-            voxel_file = "vox%d/%03d.pt" % (self.voxel_size, iid)
+#             voxel_file = "vox%d/%03d.pt" % (self.voxel_size, iid)
+            voxel_file = "voxels.pt" 
             voxel_file = os.path.join(self.data_dir, sid, mid, voxel_file)
             if os.path.isfile(voxel_file):
                 voxels = torch.load(voxel_file)
@@ -163,8 +165,10 @@ class MeshVoxDataset(Dataset):
                 voxels = voxel_data["voxel_coords"]
                 P = K.mm(RT)
 
-        id_str = "%s-%s-%02d" % (sid, mid, iid)
-        return img, verts, faces, points, normals, voxels, P, id_str, _imgs
+#         id_str = "%s-%s-%02d" % (sid, mid, iid)
+        return imgs, verts, faces, points, normals, voxels, P
+#         return img, verts, faces, points, normals, voxels, P, id_str
+
 
     def _voxelize(self, voxel_coords, P):
         V = self.voxel_size
@@ -211,7 +215,7 @@ class MeshVoxDataset(Dataset):
 
     @staticmethod
     def collate_fn(batch):
-        imgs, verts, faces, points, normals, voxels, Ps, id_strs, _imgs = zip(*batch)
+        imgs, verts, faces, points, normals, voxels, Ps, id_strs = zip(*batch)
         imgs = torch.stack(imgs, dim=0)
         if verts[0] is not None and faces[0] is not None:
             # TODO(gkioxari) Meshes should accept tuples
@@ -232,14 +236,12 @@ class MeshVoxDataset(Dataset):
         elif voxels[0].dim() == 3:
             # They are actual voxels
             voxels = torch.stack(voxels, dim=0)
-
-        _imgs = torch.stack(_imgs, dim=0)
-        return imgs, meshes, points, normals, voxels, Ps, id_strs, _imgs
+        return imgs, meshes, points, normals, voxels, Ps, id_strs
 
     def postprocess(self, batch, device=None):
         if device is None:
             device = torch.device("cuda")
-        imgs, meshes, points, normals, voxels, Ps, id_strs, _imgs = batch
+        imgs, meshes, points, normals, voxels, Ps, id_strs = batch
         imgs = imgs.to(device)
         if meshes is not None:
             meshes = meshes.to(device)
@@ -265,9 +267,7 @@ class MeshVoxDataset(Dataset):
                     voxels.append(cur_voxels)
                 voxels = torch.stack(voxels, dim=0)
 
-        _imgs = _imgs.to(device)
-
         if self.return_id_str:
-            return imgs, meshes, points, normals, voxels, id_strs, _imgs 
+            return imgs, meshes, points, normals, voxels, id_strs
         else:
-            return imgs, meshes, points, normals, voxels, _imgs
+            return imgs, meshes, points, normals, voxels
