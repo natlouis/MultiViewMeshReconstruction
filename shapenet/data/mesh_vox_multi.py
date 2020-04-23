@@ -7,10 +7,12 @@ from pytorch3d.ops import sample_points_from_meshes
 from pytorch3d.structures import Meshes
 from torch.utils.data import Dataset
 
+from pytorch3d.renderer import look_at_view_transform
+
 import torchvision.transforms as T
 from PIL import Image
 from shapenet.data.utils import imagenet_preprocess
-from shapenet.utils.coords import SHAPENET_MAX_ZMAX, SHAPENET_MIN_ZMIN, project_verts
+from shapenet.utils.coords import SHAPENET_MAX_ZMAX, SHAPENET_MIN_ZMIN, project_verts 
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,8 @@ class MeshVoxMultiDataset(Dataset):
             transform.append(imagenet_preprocess())
         self.transform = T.Compose(transform)
 
+        self.rendering_dir = 'datasets/shapenet/ShapeNetRenderingExtrinsics'
+
         summary_json = os.path.join(data_dir, "summary.json")
         with open(summary_json, "r") as f:
             summary = json.load(f)
@@ -76,13 +80,14 @@ class MeshVoxMultiDataset(Dataset):
                         self.mid_to_samples[mid] = samples
 
                     self.mid_to_idx[mid] = []
+
                     for iid in range(num_imgs):
                         if allowed_iids is None or iid in allowed_iids:
                             self.synset_ids.append(sid)
                             self.model_ids.append(mid)
                             self.image_ids.append(iid)
                             self.mid_to_idx[mid].append(len(self.image_ids)-1)
-                            
+
 
     def __len__(self):
         return len(self.synset_ids)
@@ -109,13 +114,23 @@ class MeshVoxMultiDataset(Dataset):
         _iids = [self.image_ids[i] for i in self.mid_to_idx[mid] if i != idx]
         _imgs = []
         for _iid in _iids:
-            img_path = metadata["image_list"][iid]
+            img_path = metadata["image_list"][_iid]
             img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
 
             with open(img_path, "rb") as f:
                 _img = Image.open(f).convert("RGB")
             _imgs.append(self.transform(_img))
-        _imgs = torch.stack(_imgs)
+        _imgs = torch.stack(_imgs) # N x C x H x W
+
+        #Get transformation matrices to view renderings from same camera position
+        render_metadata_path = os.path.join(self.rendering_dir, sid, mid, 'rendering_metadata.pt')
+        render_metadata = torch.load(render_metadata_path)
+        RTs = render_metadata['extrinsics']
+        
+        #Only keep matrices for all "other" images
+        idxs = torch.arange(len(self.mid_to_idx[mid]))
+        keep = idxs != iid
+        RTs = RTs[keep] # N x 3 x 4
 
         # Maybe read mesh
         verts, faces = None, None
