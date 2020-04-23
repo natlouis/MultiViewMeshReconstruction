@@ -22,6 +22,9 @@ from pytorch3d.renderer import (
 #     SoftSilhouetteShader,
     HardPhongShader
 )
+
+from shapenet.utils.coords import SHAPENET_MAX_ZMAX, SHAPENET_MIN_ZMIN, project_verts, get_blender_intrinsic_matrix
+
 # import sys
 # import os
 # sys.path.append(os.path.abspath(''))
@@ -35,11 +38,63 @@ from pytorch3d.renderer import (
 device = torch.device("cuda:0")
 torch.cuda.set_device(device)
 sid = '02958343'
-mid = 'bf37249fc8e16fd8f9a88cc63b910f3'
+mid = '4856ef1e80d356d111f983eb293b51a'
 DATA_DIR = "./datasets/shapenet/ShapeNetCore.v1/"+sid+"/"+mid
+
+metadata_path = os.path.join('./datasets/shapenet/ShapeNetV1processed', sid, mid, "metadata.pt")
+metadata = torch.load(metadata_path)
+K = metadata["intrinsic"]
+RTs = metadata["extrinsics"].to(device)
+#rotate 90 degrees about y-axis
+rot_y_90 = torch.tensor([[0, 0, 1, 0], 
+                            [0, 1, 0, 0], 
+                            [-1, 0, 0, 0], 
+                            [0, 0, 0, 1]]).to(RTs) 
+
+#rotate -90 degrees about y-axis
+rot_y_n90 = torch.tensor([[0, 0, -1, 0], 
+                            [0, 1, 0, 0], 
+                            [1, 0, 0, 0], 
+                            [0, 0, 0, 1]]).to(RTs) 
+
+#rotate -90 degrees about x-axis
+rot_x_n90 = torch.tensor([[1, 0, 0, 0], 
+                            [0, 0, 1, 0], 
+                            [0, -1, 0, 0], 
+                            [0, 0, 0, 1]]).to(RTs) 
+
+
+#Comment/uncomment GT .obj, Predicted Mesh, or GT Mesh to see plots for them
+
+###########GT .obj
+'''
 obj_filename = os.path.join(DATA_DIR, "model.obj")
 verts, faces_idx, _ = load_obj(obj_filename)
+
+verts, faces_idx, _ = load_obj(obj_filename)
 faces = faces_idx.verts_idx
+'''
+
+##########Predicted Mesh
+#Generate this by running: python demo/demo_modified.py --config-file configs/shapenet/voxmesh_R50.yaml --data_dir datasets/shapenet/ShapeNetV1processed --output output_demo --checkpoint shapenet://voxmesh_R50.pth --index 0
+obj_filename = './output_demo/results_shapenet/02958343-4856ef1e80d356d111f983eb293b51a-00.obj'
+
+verts, faces_idx, _ = load_obj(obj_filename)
+faces = faces_idx.verts_idx
+invRT = torch.inverse(RTs[0].mm(rot_y_90))
+#invRT = torch.inverse(RTs[0].mm(rot_x_n90)) 
+#invRT = torch.inverse(RTs[0]) 
+verts = project_verts(verts, invRT.cpu())
+
+##########GT Mesh 
+'''
+mesh_path = os.path.join('./datasets/shapenet/ShapeNetV1processed', sid, mid, "mesh.pt")
+mesh_data = torch.load(mesh_path)
+verts, faces = mesh_data["verts"], mesh_data["faces"]
+verts = project_verts(verts, RTs[0].cpu())
+'''
+
+
 verts_rgb = torch.ones_like(verts)[None] 
 textures = Textures(verts_rgb=verts_rgb.to(device))
 # print(verts_rgb.shape, verts.shape)
@@ -48,24 +103,56 @@ mesh = Meshes(
     faces=[faces.to(device)], 
     textures=textures
 )
-from shapenet.utils.coords import compute_extrinsic_matrix
-metadata_path = os.path.join('./datasets/shapenet/ShapeNetV1processed', sid, mid, "metadata.pt")
-metadata = torch.load(metadata_path)
-K = metadata["intrinsic"]
-RT = metadata["extrinsics"][0].to(device) #Extrinsics for first image only
-#rot = torch.tensor([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]]).to(device)
-#RT = RT.mm(rot.to(RT))
+
+metadata_path = os.path.join('./datasets/shapenet/ShapeNetRendering', sid, mid, "rendering/rendering_metadata.txt")
+metadata = []
+with open(metadata_path, 'r') as f:
+    for line in f:
+        vals = [float(v) for v in line.strip().split(" ")]
+        azimuth, elevation, yaw, dist_ratio, fov = vals 
+        distance = 1.75 * dist_ratio
+        metadata.append((azimuth, elevation, distance))
 
 batch_size = 6
+plt.figure(figsize=(10, 10))
+plt.title('R2N2 transformation settings')
+#import pdb; pdb.set_trace()
+for i, (azim, elev, dist) in enumerate(metadata):
+    R, T = look_at_view_transform(dist=dist, elev=elev, azim=-azim, device=device)
+    cameras = OpenGLPerspectiveCameras(device=device, R=R, T=T)
+    lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
+    raster_settings = RasterizationSettings(
+        image_size=512, 
+        blur_radius=0.0, 
+        faces_per_pixel=1, 
+        bin_size=0
+    )
+    renderer = MeshRenderer(
+        rasterizer=MeshRasterizer(
+        cameras=cameras, 
+        raster_settings=raster_settings
+        ),
+    shader=HardPhongShader(device=device, lights=lights)
+    )
+    image = renderer(meshes_world=mesh, R=R, T=T)
+
+    plt.subplot(5,5,i+1)
+    plt.title(str(i).zfill(2)+'.png')
+    plt.imshow(image[0, ..., :3].cpu().numpy())
+
+    #print('*'*50)
+    #print(i)
+    #print(R)
+
+plt.show()
+
+batch_size = 4
 elev_all = torch.linspace(0, 180, batch_size)
 azim_all = torch.linspace(-180, 180, batch_size)
-images = []
+i = 1
 for elev in elev_all:
     for azim in azim_all:
-        #R = RT[:3,:3].unsqueeze(0)
-        #T = -1*RT[:3,3].unsqueeze(0)
-
-        R, T = look_at_view_transform(dist=-3.0, elev=elev, azim=azim, device=device)
+        R, T = look_at_view_transform(dist=1.5, elev=elev, azim=azim,device=device)
         cameras = OpenGLPerspectiveCameras(device=device, R=R, T=T)
         lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
         raster_settings = RasterizationSettings(
@@ -82,37 +169,11 @@ for elev in elev_all:
         shader=HardPhongShader(device=device, lights=lights)
         )
         image = renderer(meshes_world=mesh, R=R, T=T)
-        plt.figure(figsize=(10, 10))
+
+        print('azim: {}, elev: {}'.format(azim, elev))
+        plt.subplot(5,5,i)
         plt.imshow(image[0, ..., :3].cpu().numpy())
 
-        plt.show()
-
-
-# In[9]:
-
-
-batch_size = 6
-elev_all = torch.linspace(0, 180, batch_size)
-azim_all = torch.linspace(-180, 180, batch_size)
-images = []
-for elev in elev_all:
-    for azim in azim_all:
-        R, T = look_at_view_transform(dist=3, elev=elev, azim=azim,device=device)
-        cameras = OpenGLPerspectiveCameras(device=device, R=R, T=T)
-        lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
-        raster_settings = RasterizationSettings(
-            image_size=512, 
-            blur_radius=0.0, 
-            faces_per_pixel=1, 
-            bin_size=0
-        )
-        renderer = MeshRenderer(
-            rasterizer=MeshRasterizer(
-            cameras=cameras, 
-            raster_settings=raster_settings
-            ),
-        shader=HardPhongShader(device=device, lights=lights)
-        )
-        image = renderer(meshes_world=mesh, R=R, T=T)
-        images.append(image[0, ..., :3].cpu().numpy())
+        i += 1
+plt.show()
 
