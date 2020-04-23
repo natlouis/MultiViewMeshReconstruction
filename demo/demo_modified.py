@@ -25,14 +25,13 @@ from shapenet.utils.coords import project_verts
 from pytorch3d.renderer import (
     look_at_view_transform,
     OpenGLPerspectiveCameras,
-    PointLights,
-    DirectionalLights,
-    Materials,
     RasterizationSettings,
     MeshRenderer,
     MeshRasterizer,
     SoftSilhouetteShader,
-    HardPhongShader
+    HardPhongShader,
+    BlendParams,
+    PointLights
 )
 
 import cv2
@@ -88,21 +87,37 @@ class VisualizationDemo(object):
         #R, T = look_at_view_transform(dist=0.742719815206*1.75, elev=27.0590432267, azim=-19.5372820907)
         R = render_RTs[iid][:3,:3].unsqueeze(0)
         T = render_RTs[iid][:3,3].unsqueeze(0)
-
         cameras = OpenGLPerspectiveCameras(R=R, T=T)
+
+        #Phong Renderer
         lights = PointLights(location=[[0.0, 0.0, -3.0]])
         raster_settings = RasterizationSettings(
-            image_size=512, 
+            image_size=256, 
             blur_radius=0.0, 
             faces_per_pixel=1, 
             bin_size=0
         )   
-        renderer = MeshRenderer(
+        phong_renderer = MeshRenderer(
             rasterizer=MeshRasterizer(
             cameras=cameras, 
             raster_settings=raster_settings
             ),  
         shader=HardPhongShader(lights=lights)
+        )
+
+        #Silhouette Renderer
+        blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
+        raster_settings = RasterizationSettings(
+            image_size=256, 
+            blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma, 
+            faces_per_pixel=50, 
+        )   
+        silhouette_renderer = MeshRenderer(
+            rasterizer=MeshRasterizer(
+            cameras=cameras, 
+            raster_settings=raster_settings
+            ),  
+        shader=SoftSilhouetteShader(blend_params=blend_params)
         )   
 
         verts, faces = mesh.get_mesh_verts_faces(0)
@@ -110,12 +125,22 @@ class VisualizationDemo(object):
         textures = Textures(verts_rgb=verts_rgb)
         mesh.textures = textures 
 
-        rendered_image = renderer(meshes_world=mesh, R=R, T=T)
+        img = image_to_numpy(deprocess(image[0]))
+        mesh_image = phong_renderer(meshes_world=mesh, R=R, T=T)
+        silhouette_image = silhouette_renderer(meshes_world=mesh, R=R, T=T)
 
-        plt.imshow(rendered_image[0, ..., :3].cpu().numpy())
+        plt.subplot(1,3,1)
+        plt.imshow(img)
+        plt.title('input image')
+        plt.subplot(1,3,2)
+        plt.imshow(mesh_image[0, ..., :3].cpu().numpy())
+        plt.title('rendered mesh')
+        plt.subplot(1,3,3)
+        plt.imshow(silhouette_image[0, ..., 3].cpu().numpy())
+        plt.title('silhouette of rendered mesh')
+
         plt.show()
 
-        img = image_to_numpy(deprocess(image[0]))
         vis_utils.visualize_prediction(id_str, img, mesh, self.output_dir)
 
 def setup_cfg(args):
