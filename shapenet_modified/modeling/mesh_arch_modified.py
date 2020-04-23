@@ -101,7 +101,8 @@ class VoxMeshHead(nn.Module):
 
         if voxel_only:
             dummy_meshes = self._dummy_mesh(N, device)
-            dummy_refined = self.mesh_head(img_feats, dummy_meshes, P)
+#             dummy_refined = self.mesh_head(img_feats, dummy_meshes, P)
+            dummy_refined = self.mesh_head(static_feats, dummy_meshes, P)
             return voxel_scores, dummy_refined
 
         cubified_meshes = self.cubify(voxel_scores)
