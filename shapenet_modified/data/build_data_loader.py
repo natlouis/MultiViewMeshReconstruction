@@ -56,6 +56,9 @@ def build_data_loader(
             return_mesh=return_mesh,
             sample_online=sample_online,
             return_id_str=return_id_str,
+            ##
+            input_size = 224
+            ##
         )
         collate_fn = MeshVoxDataset.collate_fn
     else:

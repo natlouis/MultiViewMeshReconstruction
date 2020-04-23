@@ -54,8 +54,8 @@ class Encoder(torch.nn.Module):
         for img in rendering_images:
             feat1 = self.stage1(img.squeeze(dim=0))#64
             feat2 = self.stage2(feat1)#128
-            feat3 = self.stage2(feat2)#256
-            feat4 = self.stage2(feat3)#512
+            feat3 = self.stage3(feat2)#256
+            feat4 = self.stage4(feat3)#512
             # feat4.size   torch.Size([batch_size, 512, 28, 28])
             
 #             features = self.vgg(img.squeeze(dim=0))
@@ -73,24 +73,22 @@ class Encoder(torch.nn.Module):
         feats1 = torch.stack(feats1).permute(1, 0, 2, 3, 4).contiguous() 
         feats2 = torch.stack(feats2).permute(1, 0, 2, 3, 4).contiguous() 
         feats3 = torch.stack(feats3).permute(1, 0, 2, 3, 4).contiguous() 
-        feats2 = torch.stack(feats2).permute(1, 0, 2, 3, 4).contiguous() 
         image_features = torch.stack(image_features).permute(1, 0, 2, 3, 4).contiguous()
         # print(image_features.size())  # torch.Size([batch_size, n_views, 256, 8, 8])
-        feats1_mean = torch.mean(feats1, 1, True).squeeze()
-        feats1_std = torch.std(feats1, 1, True).squeeze()
-        feats1_max = torch.max(feats1, 1, True)[0].squeeze()
+        feats1_mean = torch.mean(feats1, 1, True).squeeze(1)
+        feats1_std = torch.std(feats1, 1, True).squeeze(1)
+        feats1_max = torch.max(feats1, 1, True)[0].squeeze(1)
         
-        feats2_mean = torch.mean(feats2, 1, True).squeeze()
-        feats2_std = torch.std(feats2, 1, True).squeeze()
-        feats2_max = torch.max(feats2, 1, True)[0].squeeze()
+        feats2_mean = torch.mean(feats2, 1, True).squeeze(1)
+        feats2_std = torch.std(feats2, 1, True).squeeze(1)
+        feats2_max = torch.max(feats2, 1, True)[0].squeeze(1)
         
-        feats3_mean = torch.mean(feats3, 1, True).squeeze()
-        feats3_std = torch.std(feats3, 1, True).squeeze()
-        feats3_max = torch.max(feats3, 1, True)[0].squeeze()
+        feats3_mean = torch.mean(feats3, 1, True).squeeze(1)
+        feats3_std = torch.std(feats3, 1, True).squeeze(1)
+        feats3_max = torch.max(feats3, 1, True)[0].squeeze(1)
         
         static_features = [feats1_mean, feats1_std, feats1_max, feats2_mean, feats2_std, feats2_max, feats3_mean, feats3_std, feats3_max] 
-        feat_dims = [64,64,64,128,128,128,256,256,256]
-        return image_features, static_features,feat_dims
+        return image_features, static_features
   
     
     

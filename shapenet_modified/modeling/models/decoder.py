@@ -22,7 +22,7 @@ class Decoder(torch.nn.Module):
             torch.nn.ReLU()
         )
         self.layer3 = torch.nn.Sequential(
-            torch.nn.ConvTranspose3d(128, 32, kernel_size=4, stride=2, bias=cfg.MODEL.VOXEL_HEAD.TCONV_USE_BIAS padding=1),
+            torch.nn.ConvTranspose3d(128, 32, kernel_size=4, stride=2, bias=cfg.MODEL.VOXEL_HEAD.TCONV_USE_BIAS, padding=1),
             torch.nn.BatchNorm3d(32),
             torch.nn.ReLU()
         )
