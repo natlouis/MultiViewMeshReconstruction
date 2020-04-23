@@ -88,6 +88,7 @@ def main_worker(worker_id, args):
 
     # build the model
     model = build_model(cfg)
+    
     model.to(device)
     if distributed:
         model = torch.nn.parallel.DistributedDataParallel(
@@ -97,7 +98,7 @@ def main_worker(worker_id, args):
             check_reduction=True,
             broadcast_buffers=False,
         )
-
+    
     optimizer = build_optimizer(cfg, model)
     cfg.SOLVER.COMPUTED_MAX_ITERS = cfg.SOLVER.NUM_EPOCHS * len(loaders["train"])
     scheduler = build_lr_scheduler(cfg, optimizer)
@@ -137,6 +138,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
         params = list(model.module.parameters())
     else:
         params = list(model.parameters())
+
     loss_moving_average = cp.data.get("loss_moving_average", None)
     while cp.epoch < cfg.SOLVER.NUM_EPOCHS:
         if comm.is_main_process():
@@ -240,7 +242,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 loss = 0.0 * sum(p.sum() for p in params)
 
             # Backprop and step
-            scheduler.step()
+#             scheduler.step()
             optimizer.zero_grad()
             with Timer("Backward"):
                 loss.backward()
@@ -251,12 +253,16 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             # summed, so each GPU has the same gradients.
             num_infinite_grad = 0
             for p in params:
+                if p.requires_grad == False: 
+                    continue
                 num_infinite_grad += (torch.isfinite(p.grad) == 0).sum().item()
             if num_infinite_grad == 0:
                 optimizer.step()
             else:
                 msg = "WARNING: Got %d non-finite elements in gradient; skipping update"
                 logger.info(msg % num_infinite_grad)
+                
+            scheduler.step()
             cp.step()
 
             if cp.t % cfg.SOLVER.CHECKPOINT_PERIOD == 0:
