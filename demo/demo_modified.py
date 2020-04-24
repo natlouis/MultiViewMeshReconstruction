@@ -55,7 +55,7 @@ class VisualizationDemo(object):
         os.makedirs(output_dir, exist_ok=True)
         self.output_dir = output_dir
 
-      def run_on_image(self, image, id_str):
+      def run_on_image(self, image, id_str, gt_verts, gt_faces):
         deprocess = imagenet_deprocess(rescale_image=False)
 
         with torch.no_grad():
@@ -75,7 +75,10 @@ class VisualizationDemo(object):
                                     [0, 0, 0, 1]]).to(RTs) 
 
         mesh = meshes_pred[-1][0]
+        #For some strange reason all classes (expect vehicle class) require a 90 degree rotation about the y-axis
+        #for the GT mesh
         invRT = torch.inverse(RTs[iid].mm(rot_y_90))
+        invRT_no_rot = torch.inverse(RTs[iid])
         mesh._verts_list[0] = project_verts(mesh._verts_list[0], invRT.cpu())
 
         #Get look at view extrinsics
@@ -92,7 +95,7 @@ class VisualizationDemo(object):
         #Phong Renderer
         lights = PointLights(location=[[0.0, 0.0, -3.0]])
         raster_settings = RasterizationSettings(
-            image_size=256, 
+            image_size=137, 
             blur_radius=0.0, 
             faces_per_pixel=1, 
             bin_size=0
@@ -108,9 +111,9 @@ class VisualizationDemo(object):
         #Silhouette Renderer
         blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
         raster_settings = RasterizationSettings(
-            image_size=256, 
+            image_size=137, 
             blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma, 
-            faces_per_pixel=50, 
+            faces_per_pixel=250, 
         )   
         silhouette_renderer = MeshRenderer(
             rasterizer=MeshRasterizer(
@@ -125,21 +128,39 @@ class VisualizationDemo(object):
         textures = Textures(verts_rgb=verts_rgb)
         mesh.textures = textures 
 
+        verts_rgb = torch.ones_like(gt_verts)[None]
+        textures = Textures(verts_rgb=verts_rgb)
+        #Invert without the rotation for the vehicle class
+        if sid == '02958343':
+            gt_verts = project_verts(gt_verts, invRT_no_rot.cpu())
+        else:
+            gt_verts = project_verts(gt_verts, invRT.cpu())
+        gt_mesh = Meshes(
+	    verts=[gt_verts],   
+	    faces=[gt_faces], 
+	    textures=textures
+	) 
+
         img = image_to_numpy(deprocess(image[0]))
         mesh_image = phong_renderer(meshes_world=mesh, R=R, T=T)
+        gt_silh_image = silhouette_renderer(meshes_world=gt_mesh, R=R, T=T)
         silhouette_image = silhouette_renderer(meshes_world=mesh, R=R, T=T)
 
-        plt.subplot(1,3,1)
+        plt.subplot(2,2,1)
         plt.imshow(img)
         plt.title('input image')
-        plt.subplot(1,3,2)
+        plt.subplot(2,2,2)
         plt.imshow(mesh_image[0, ..., :3].cpu().numpy())
         plt.title('rendered mesh')
-        plt.subplot(1,3,3)
+        plt.subplot(2,2,3)
+        plt.imshow(gt_silh_image[0, ..., 3].cpu().numpy())
+        plt.title('silhouette of gt mesh')
+        plt.subplot(2,2,4)
         plt.imshow(silhouette_image[0, ..., 3].cpu().numpy())
         plt.title('silhouette of rendered mesh')
 
         plt.show()
+        #plt.savefig('./output_demo/figures/'+id_str+'.png')
 
         vis_utils.visualize_prediction(id_str, img, mesh, self.output_dir)
 
@@ -182,7 +203,7 @@ if __name__ == "__main__":
 
 #     data_dir = './datasets/shapenet/ShapeNetV1processed'
     data_dir = args.data_dir
-    dataset = MeshVoxDataset(data_dir, return_mesh=False)
+    dataset = MeshVoxDataset(data_dir, return_mesh=True)
 
     #Randomly select an image from the ShapeNet dataset if index args is empty
     if args.index is None:
@@ -197,5 +218,5 @@ if __name__ == "__main__":
     P     = item[6]
     id_str = item[7] 
 
-    prediction = demo.run_on_image(img, id_str)
+    prediction = demo.run_on_image(img, id_str, verts, faces)
     logger.info("Predictions saved in %s" % (args.output))
