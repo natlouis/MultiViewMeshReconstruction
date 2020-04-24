@@ -13,6 +13,8 @@ from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.logger import setup_logger
 from fvcore.common.file_io import PathManager
 
+import numpy as np
+
 from shapenet.config import get_shapenet_cfg
 from shapenet.data import build_data_loader, register_shapenet
 from shapenet.evaluation import evaluate_split, evaluate_test, evaluate_test_p2m
@@ -22,10 +24,24 @@ from shapenet.modeling import MeshLoss, build_model
 from shapenet.solver import build_lr_scheduler, build_optimizer
 from shapenet.utils import Checkpoint, Timer, clean_state_dict, default_argument_parser
 
+from shapenet.utils.coords import project_verts
+
+from pytorch3d.renderer import (
+    look_at_view_transform,
+    OpenGLPerspectiveCameras,
+    RasterizationSettings,
+    MeshRenderer,
+    MeshRasterizer,
+    SoftSilhouetteShader,
+    HardPhongShader,
+    BlendParams,
+    PointLights
+)
+
 logger = logging.getLogger("shapenet")
 
-dataset = "MeshVox"
-#dataset = "MeshVoxMulti"
+#dataset = "MeshVox"
+dataset = "MeshVoxMulti"
 
 def copy_data(args):
     data_base, data_ext = os.path.splitext(os.path.basename(args.data_dir))
@@ -149,14 +165,28 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             if hasattr(loader.sampler, "set_epoch"):
                 loader.sampler.set_epoch(cp.epoch)
 
+	#Config settings for renderer
+        blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
+        raster_settings = RasterizationSettings(
+                    image_size=137,
+                    blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma,
+                    faces_per_pixel=50,
+                    )
+        rot_y_90 = torch.tensor([[0, 0, 1, 0],
+                                    [0, 1, 0, 0],
+                                    [-1, 0, 0, 0],
+                                    [0, 0, 0, 1]]).float().to(device)
+
         for i, batch in enumerate(loaders["train"]):
             if i == 0:
                 iteration_timer.start()
             else:
                 iteration_timer.tick()
             batch = loaders["train"].postprocess(batch, device)
-            #imgs, meshes_gt, points_gt, normals_gt, voxels_gt, _imgs = batch
-            imgs, meshes_gt, points_gt, normals_gt, voxels_gt = batch
+            if dataset == 'MeshVoxMulti':
+                imgs, meshes_gt, points_gt, normals_gt, voxels_gt, id_strs, _imgs, render_RTs, RTs = batch
+            else:
+                imgs, meshes_gt, points_gt, normals_gt, voxels_gt = batch
 
             #NOTE: _imgs contains all of the other images in belonging to this model
             #We have to select the next-best-view from that list of images
@@ -175,8 +205,6 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             with Timer("Forward"):
                 voxel_scores, meshes_pred = model(imgs, **model_kwargs)
 
-            #TODO: Render masks from predicted mesh for each view
-
             num_infinite = 0
             for cur_meshes in meshes_pred:
                 cur_verts = cur_meshes.verts_packed()
@@ -184,6 +212,51 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             if num_infinite > 0:
                 logger.info("ERROR: Got %d non-finite verts" % num_infinite)
                 return
+
+            total_silh_loss = 0 #Total silhouette loss, to be added to "loss" below
+            if not meshes_gt is None: #Voxel only training for first few iterations
+                _meshes_pred = meshes_pred[-1].clone()
+                _meshes_gt   = meshes_gt[-1].clone()
+
+                # Render masks from predicted mesh for each view
+                for b, (cur_gt_mesh, cur_pred_mesh) in enumerate(zip(meshes_gt, _meshes_pred)):
+                    probability_map = []
+
+                    #Maybe computationally expensive, but need to transform back to world space based on rendered image viewpoint
+                    RT = RTs[b]
+                    invRT = torch.inverse(RT.mm(rot_y_90)) #Rotate 90 degrees about y-axis and invert
+                    invRT_no_rot = torch.inverse(RT) #Just invert 
+
+                    cur_pred_mesh._verts_list[0] = project_verts(cur_pred_mesh._verts_list[0], invRT)
+                    sid = id_strs[b].split('-')[0]
+
+                    #For some strange reason all classes (expect vehicle class) require a 90 degree rotation about the y-axis 
+                    if sid == '02958343':
+                        cur_gt_mesh._verts_list[0] = project_verts(cur_gt_mesh._verts_list[0], invRT_no_rot)
+                    else:
+                        cur_gt_mesh._verts_list[0] = project_verts(cur_gt_mesh._verts_list[0], invRT)
+
+                    for iid in range(len(render_RTs[b])):
+
+                        R = render_RTs[b][iid][:3,:3].unsqueeze(0)
+                        T = render_RTs[b][iid][:3,3].unsqueeze(0)
+                        cameras = OpenGLPerspectiveCameras(device=device, R=R, T=T)
+                        silhouette_renderer = MeshRenderer(
+                                    rasterizer=MeshRasterizer(
+                                    cameras=cameras,
+                                    raster_settings=raster_settings
+                                    ),
+                                shader=SoftSilhouetteShader(blend_params=blend_params)
+                                )
+
+                        ref_image = silhouette_renderer(meshes_world=cur_gt_mesh, R=R, T=T)
+                        image = silhouette_renderer(meshes_world=cur_pred_mesh, R=R, T=T)
+
+                        #MSE Loss between both silhouettes
+                        silh_loss = torch.sum((image[0,:,:,3] - ref_image[0,:,:,3]) ** 2)
+                        probability_map.append(silh_loss.detach())
+
+                        total_silh_loss += silh_loss 
 
             loss, losses = None, {}
             if num_infinite == 0:
@@ -322,7 +395,7 @@ def eval_and_save(model, loaders, optimizer, scheduler, cp):
 def setup_loaders(cfg):
     loaders = {}
     loaders["train"] = build_data_loader(
-        cfg, dataset, "train", multigpu=comm.get_world_size() > 1
+        cfg, dataset, "train", multigpu=comm.get_world_size() > 1, num_workers=6
     )
 
     # Since sampling the mesh is now coupled with the data loader, we need to

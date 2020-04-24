@@ -79,14 +79,14 @@ class MeshVoxMultiDataset(Dataset):
                         samples = torch.load(samples_path)
                         self.mid_to_samples[mid] = samples
 
-                    self.mid_to_idx[mid] = []
+                    self.mid_to_idx[sid+'_'+mid] = []
 
                     for iid in range(num_imgs):
                         if allowed_iids is None or iid in allowed_iids:
                             self.synset_ids.append(sid)
                             self.model_ids.append(mid)
                             self.image_ids.append(iid)
-                            self.mid_to_idx[mid].append(len(self.image_ids)-1)
+                            self.mid_to_idx[sid+'_'+mid].append(len(self.image_ids)-1)
 
 
     def __len__(self):
@@ -111,7 +111,7 @@ class MeshVoxMultiDataset(Dataset):
         img = self.transform(img)
 
         # All other rendered images for this model. Needed for "viewgrid"
-        _iids = [self.image_ids[i] for i in self.mid_to_idx[mid] if i != idx]
+        _iids = [self.image_ids[i] for i in self.mid_to_idx[sid+'_'+mid] if i != idx]
         _imgs = []
         for _iid in _iids:
             img_path = metadata["image_list"][_iid]
@@ -122,15 +122,26 @@ class MeshVoxMultiDataset(Dataset):
             _imgs.append(self.transform(_img))
         _imgs = torch.stack(_imgs) # N x C x H x W
 
+        #Zero pad so N = 23. 24 images minus the current image
+        N, C, H, W = _imgs.shape
+        n = 23
+        d = 0
+        if len(_imgs) < n:
+            d = n - len(_imgs)
+            _imgs = torch.cat((_imgs, torch.zeros(d,C,H,W)))
+
+        #Mask for zero-padded images. 1 for valid image, 0 for zero image
+        mask = torch.cat((torch.ones(N), torch.zeros(d)))
+
         #Get transformation matrices to view renderings from same camera position
         render_metadata_path = os.path.join(self.rendering_dir, sid, mid, 'rendering_metadata.pt')
         render_metadata = torch.load(render_metadata_path)
-        RTs = render_metadata['extrinsics']
+        render_RTs = render_metadata['extrinsics']
         
         #Only keep matrices for all "other" images
-        idxs = torch.arange(len(self.mid_to_idx[mid]))
-        keep = idxs != iid
-        RTs = RTs[keep] # N x 3 x 4
+        idxs = torch.arange(n+1)
+        keep = (idxs != iid)
+        render_RTs = render_RTs[keep] # N x 3 x 4
 
         # Maybe read mesh
         verts, faces = None, None
@@ -170,7 +181,7 @@ class MeshVoxMultiDataset(Dataset):
                 P = K.mm(RT)
 
         id_str = "%s-%s-%02d" % (sid, mid, iid)
-        return img, verts, faces, points, normals, voxels, P, id_str, _imgs
+        return img, verts, faces, points, normals, voxels, P, id_str, _imgs, render_RTs, RT
 
     def _voxelize(self, voxel_coords, P):
         V = self.voxel_size
@@ -217,7 +228,7 @@ class MeshVoxMultiDataset(Dataset):
 
     @staticmethod
     def collate_fn(batch):
-        imgs, verts, faces, points, normals, voxels, Ps, id_strs, _imgs = zip(*batch)
+        imgs, verts, faces, points, normals, voxels, Ps, id_strs, _imgs, render_RTs, RT = zip(*batch)
         imgs = torch.stack(imgs, dim=0)
         if verts[0] is not None and faces[0] is not None:
             # TODO(gkioxari) Meshes should accept tuples
@@ -240,12 +251,15 @@ class MeshVoxMultiDataset(Dataset):
             voxels = torch.stack(voxels, dim=0)
 
         _imgs = torch.stack(_imgs, dim=0)
-        return imgs, meshes, points, normals, voxels, Ps, id_strs, _imgs
+        render_RTs   = torch.stack(render_RTs, dim=0)
+        RT = torch.stack(RT, dim=0)
+
+        return imgs, meshes, points, normals, voxels, Ps, id_strs, _imgs, render_RTs, RT 
 
     def postprocess(self, batch, device=None):
         if device is None:
             device = torch.device("cuda")
-        imgs, meshes, points, normals, voxels, Ps, id_strs, _imgs = batch
+        imgs, meshes, points, normals, voxels, Ps, id_strs, _imgs, render_RTs, RT = batch
         imgs = imgs.to(device)
         if meshes is not None:
             meshes = meshes.to(device)
@@ -272,8 +286,10 @@ class MeshVoxMultiDataset(Dataset):
                 voxels = torch.stack(voxels, dim=0)
 
         _imgs = _imgs.to(device)
+        render_RTs   = render_RTs.to(device)
+        RT = RT.to(device)
 
         if self.return_id_str:
-            return imgs, meshes, points, normals, voxels, id_strs, _imgs 
+            return imgs, meshes, points, normals, voxels, id_strs, _imgs, render_RTs, RT
         else:
-            return imgs, meshes, points, normals, voxels, _imgs
+            return imgs, meshes, points, normals, voxels, _imgs, render_RTs, RT
