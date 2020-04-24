@@ -26,6 +26,7 @@ from shapenet.utils import Checkpoint, Timer, clean_state_dict, default_argument
 
 from shapenet.utils.coords import project_verts
 
+from pytorch3d.structures import Textures
 from pytorch3d.renderer import (
     look_at_view_transform,
     OpenGLPerspectiveCameras,
@@ -40,8 +41,8 @@ from pytorch3d.renderer import (
 
 logger = logging.getLogger("shapenet")
 
-#dataset = "MeshVox"
-dataset = "MeshVoxMulti"
+dataset = "MeshVox"
+#dataset = "MeshVoxMulti"
 
 def copy_data(args):
     data_base, data_ext = os.path.splitext(os.path.basename(args.data_dir))
@@ -142,6 +143,14 @@ def main_worker(worker_id, args):
         optimizer.load_state_dict(cp.latest_states["optim"])
         scheduler.load_state_dict(cp.latest_states["lr_scheduler"])
 
+    #Use pretrained voxmesh weights if supplied
+    if not cfg.MODEL.CHECKPOINT == "":
+        saved_weights = torch.load(PathManager.get_local_path(cfg.MODEL.CHECKPOINT))
+        logger.info("Loading model from checkpoint: %s" % (cfg.MODEL.CHECKPOINT))
+
+        state_dict = clean_state_dict(saved_weights["best_states"]["model"])
+        model.load_state_dict(state_dict) 
+
     training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn)
 
 
@@ -168,7 +177,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
 	#Config settings for renderer
         blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
         raster_settings = RasterizationSettings(
-                    image_size=137,
+                    image_size=256,
                     blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma,
                     faces_per_pixel=50,
                     )
@@ -182,6 +191,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 iteration_timer.start()
             else:
                 iteration_timer.tick()
+
             batch = loaders["train"].postprocess(batch, device)
             if dataset == 'MeshVoxMulti':
                 imgs, meshes_gt, points_gt, normals_gt, voxels_gt, id_strs, _imgs, render_RTs, RTs = batch
@@ -213,15 +223,16 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 logger.info("ERROR: Got %d non-finite verts" % num_infinite)
                 return
 
-            total_silh_loss = 0 #Total silhouette loss, to be added to "loss" below
-            if not meshes_gt is None: #Voxel only training for first few iterations
+            total_silh_loss = torch.tensor(0.) #Total silhouette loss, to be added to "loss" below
+            if not meshes_gt is None and not model_kwargs.get("voxel_only", False): #Voxel only training for first few iterations
                 _meshes_pred = meshes_pred[-1].clone()
                 _meshes_gt   = meshes_gt[-1].clone()
 
                 # Render masks from predicted mesh for each view
+                #GT probability map to supervise prediction module
+                B = len(meshes_gt)
+                probability_map = 0.01*torch.ones((B, 24)) #batch size x 24
                 for b, (cur_gt_mesh, cur_pred_mesh) in enumerate(zip(meshes_gt, _meshes_pred)):
-                    probability_map = []
-
                     #Maybe computationally expensive, but need to transform back to world space based on rendered image viewpoint
                     RT = RTs[b]
                     invRT = torch.inverse(RT.mm(rot_y_90)) #Rotate 90 degrees about y-axis and invert
@@ -252,11 +263,28 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                         ref_image = silhouette_renderer(meshes_world=cur_gt_mesh, R=R, T=T)
                         image = silhouette_renderer(meshes_world=cur_pred_mesh, R=R, T=T)
 
+                        '''
+                        import matplotlib.pyplot as plt
+                        plt.subplot(1,2,1)
+                        plt.imshow(ref_image[0,:,:,3].detach().cpu().numpy())
+                        plt.subplot(1,2,2)
+                        plt.imshow(image[0,:,:,3].detach().cpu().numpy())
+                        plt.show()
+                        '''
+
                         #MSE Loss between both silhouettes
                         silh_loss = torch.sum((image[0,:,:,3] - ref_image[0,:,:,3]) ** 2)
-                        probability_map.append(silh_loss.detach())
+                        probability_map[b,iid] = silh_loss.detach()
 
                         total_silh_loss += silh_loss 
+
+                probability_map = torch.nn.functional.softmax(probability_map, dim=1) #Softmax across images
+                nbv_idx = torch.argmax(probability_map, dim=1) #Next-best view indices
+                nbv_imgs = _imgs[torch.arange(B),nbv_idx] #Next-best view images
+                 
+                #NOTE: Do a second forward pass through the model? This time for multi-view reconstruction
+                #The input should be the first image and the next-best view 
+                #voxel_scores, meshes_pred = model(nbv_imgs, **model_kwargs)
 
             loss, losses = None, {}
             if num_infinite == 0:
@@ -267,6 +295,11 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             if loss is None or (torch.isfinite(loss) == 0).sum().item() > 0:
                 logger.info("WARNING: Got non-finite loss %f" % loss)
                 skip = True
+
+            #Add silhouette loss to total loss
+            silh_weight = 1.0 #TODO: Add a weight for the silhouette loss?
+            loss = loss + total_silh_loss * silh_weight 
+            losses['silhouette'] = total_silh_loss 
 
             if model_kwargs.get("voxel_only", False):
                 for k, v in losses.items():
