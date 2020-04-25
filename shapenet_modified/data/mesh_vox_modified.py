@@ -113,11 +113,14 @@ class MeshVoxDataset(Dataset):
             img = Image.open(f).convert("RGB")
         img = self.transform(img)
 
-        # All images for this model
+        # All other images for this model
         # CAN add a variable to control the number of images
-        _iids = [self.image_ids[i] for i in self.mid_to_idx[sid+'_'+mid]]
+        _iids = [self.image_ids[i] for i in self.mid_to_idx[sid+'_'+mid] if i != idx]
         _imgs = []
-        for _iid in _iids:
+
+        num_to_sample = 2 #Number of images to sample, not including the current one
+        sampled_idxs = torch.randint(0, len(_iids), size=(num_to_sample,))
+        for _iid in sampled_idxs:
             img_path = metadata["image_list"][_iid]
             img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
 
@@ -125,11 +128,11 @@ class MeshVoxDataset(Dataset):
                 _img = Image.open(f).convert("RGB")
             _imgs.append(self.transform(_img))
         _imgs = torch.stack(_imgs)
-        # tensor([N,3,224,224])
+        _imgs = torch.cat((img.unsqueeze(0), _imgs))# tensor([N,3,224,224]) where N = num_to_sample + 1
         
-        #Zero pad so N = 24
+        #Zero pad so N = num_to_sample + 1
         N, C, H, W = _imgs.shape
-        n = 24
+        n = num_to_sample + 1
         d = 0 
         if len(_imgs) < n:
             d = n - len(_imgs)
