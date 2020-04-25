@@ -55,8 +55,6 @@ class MeshVoxDataset(Dataset):
         self.transform = T.Compose([T.Resize(input_size), 
                                     T.ToTensor(), 
                                     imagenet_preprocess()])
-        
-        self.rendering_dir = 'datasets/shapenet/ShapeNetRenderingExtrinsics'
 
         summary_json = os.path.join(data_dir, "summary.json")
         with open(summary_json, "r") as f:
@@ -76,21 +74,21 @@ class MeshVoxDataset(Dataset):
                     if allowed_mids is not None and mid not in allowed_mids:
                         continue
                     allowed_iids = None
-                    if split is not None and isinstance(split[sid], dict):
-                        allowed_iids = set(split[sid][mid])
+#                     if split is not None and isinstance(split[sid], dict):
+#                         allowed_iids = set(split[sid][mid])
                     if not sample_online and in_memory:
                         samples_path = os.path.join(data_dir, sid, mid, "samples.pt")
                         samples = torch.load(samples_path)
                         self.mid_to_samples[mid] = samples
 
-                    self.mid_to_idx[sid+'_'+mid] = []
+                    self.mid_to_idx[mid] = []
                     for iid in range(num_imgs):
                         if allowed_iids is None or iid in allowed_iids:
                             self.synset_ids.append(sid)
                             self.model_ids.append(mid)
                             self.image_ids.append(iid)
-                            self.mid_to_idx[sid+'_'+mid].append(len(self.image_ids)-1)
-
+                            self.mid_to_idx[mid].append(len(self.image_ids)-1)
+                            
 
     def __len__(self):
         return len(self.synset_ids)
@@ -113,12 +111,23 @@ class MeshVoxDataset(Dataset):
             img = Image.open(f).convert("RGB")
         img = self.transform(img)
 
-        # All other images for this model
-        # CAN add a variable to control the number of images
-        _iids = [self.image_ids[i] for i in self.mid_to_idx[sid+'_'+mid] if i != idx]
-        _imgs = []
+#         # All images for this model
+#         _iids = [self.image_ids[i] for i in self.mid_to_idx[mid]]
+#         _imgs = []
+#         for _iid in _iids:
+#             img_path = metadata["image_list"][_iid]
+#             img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
 
-        num_to_sample = 2 #Number of images to sample, not including the current one
+#             with open(img_path, "rb") as f:
+#                 _img = Image.open(f).convert("RGB")
+#             _imgs.append(self.transform(_img))
+#         _imgs = torch.stack(_imgs)
+#         # tensor([N,3,224,224])
+
+        # All other images for this model
+        _iids = [self.image_ids[i] for i in self.mid_to_idx[mid] if i != idx]
+        _imgs = []
+        num_to_sample = 2 #Number of images to reconstruct beside the current image
         sampled_idxs = torch.randint(0, len(_iids), size=(num_to_sample,))
         for _iid in sampled_idxs:
             img_path = metadata["image_list"][_iid]
@@ -128,32 +137,11 @@ class MeshVoxDataset(Dataset):
                 _img = Image.open(f).convert("RGB")
             _imgs.append(self.transform(_img))
         _imgs = torch.stack(_imgs)
-        _imgs = torch.cat((img.unsqueeze(0), _imgs))# tensor([N,3,224,224]) where N = num_to_sample + 1
+        _imgs = torch.cat((img.unsqueeze(0), _imgs))# tensor([N,3,224,224]) where N = num_to_sample+1
         
-        #Zero pad so N = num_to_sample + 1
-        N, C, H, W = _imgs.shape
-        n = num_to_sample + 1
-        d = 0 
-        if len(_imgs) < n:
-            d = n - len(_imgs)
-            _imgs = torch.cat((_imgs, torch.zeros(d,C,H,W)), dim=0)
-
-        #Mask for zero-padded images. 1 for valid image, 0 for zero image
-        mask = torch.cat((torch.ones(N), torch.zeros(d)))
-
-        '''
-        #Get transformation matrices to view renderings from same camera position
-        render_metadata_path = os.path.join(self.rendering_dir, sid, mid, 'rendering_metadata.pt')
-        render_metadata = torch.load(render_metadata_path)
-        RTs = render_metadata['extrinsics']
-    
-        #Only keep matrices for all "other" images
-        idxs = torch.arange(len(self.mid_to_idx[sid+'_'+mid]))
-        keep = idxs != iid 
-        RTs = RTs[:N]
-        RTs = RTs[keep] # N x 3 x 4  
-        '''
-
+        
+        
+        
         # Maybe read mesh
         verts, faces = None, None
         if self.return_mesh:
@@ -262,7 +250,6 @@ class MeshVoxDataset(Dataset):
             voxels = torch.stack(voxels, dim=0)
 
         _imgs = torch.stack(_imgs, dim=0)
-
         return imgs, meshes, points, normals, voxels, Ps, id_strs, _imgs
 
     def postprocess(self, batch, device=None):
