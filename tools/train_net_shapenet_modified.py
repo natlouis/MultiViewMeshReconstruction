@@ -353,6 +353,10 @@ def setup(args):
     data_dir, splits_file = register_shapenet(cfg.DATASETS.NAME)
     cfg.DATASETS.DATA_DIR = data_dir
     cfg.DATASETS.SPLITS_FILE = splits_file
+##
+    cfg.PRETRAINED_MODEL = args.trained_model_from_Pix_2_Vox
+    cfg.PRETRAINED_MODEL2 = args.trained_model_from_Mesh_RCNN
+##
     # if data was copied the data dir has changed
     if args.copy_data:
         cfg.DATASETS.DATA_DIR = args.data_dir
