@@ -13,7 +13,7 @@ from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.logger import setup_logger
 from fvcore.common.file_io import PathManager
 
-from ..loss_prediction_module import LossPredictionModule
+from loss_prediction_module import LossPredictionModule
 
 import numpy as np
 
@@ -175,7 +175,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
     loss_moving_average = cp.data.get("loss_moving_average", None)
 
     # Zhengyuan modification
-    loss_predictor = LossPredictionModule()
+    loss_predictor = LossPredictionModule().to(device)
     loss_pred_optim = torch.optim.SGD(loss_predictor.parameters(), lr = 1e-3, momentum=0.9)
 
     while cp.epoch < cfg.SOLVER.NUM_EPOCHS:
