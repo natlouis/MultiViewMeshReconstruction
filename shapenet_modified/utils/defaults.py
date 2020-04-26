@@ -46,4 +46,14 @@ def default_argument_parser():
         default=None,
         nargs=argparse.REMAINDER,
     )
+##
+    parser.add_argument(
+        "--trained_model_from_Pix_2_Vox",
+        default=None
+    )
+    parser.add_argument(
+        "--trained_model_from_Mesh_RCNN",
+        default=None
+    )
+##   
     return parser.parse_args()

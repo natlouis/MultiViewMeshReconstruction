@@ -33,7 +33,7 @@ class VoxMeshHead(nn.Module):
 #         cfg.MODEL.VOXEL_HEAD.COMPUTED_INPUT_CHANNELS = feat_dims[-1]
 #         self.voxel_head = VoxelHead(cfg)
         self.voxel_head = VoxelHead(cfg)
-    
+        
         # mesh head
         
 #       can further refine this part

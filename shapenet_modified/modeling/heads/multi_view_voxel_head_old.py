@@ -8,8 +8,8 @@ from torch.nn import functional as F
 from shapenet.modeling.models.encoder_modified import Encoder
 from shapenet.modeling.models.decoder import Decoder
 from shapenet.modeling.models.merger import Merger
-# from shapenet.utils.network_utils import init_weights
-from shapenet.utils.checkpoint import clean_state_dict
+from shapenet.utils.network_utils import init_weights
+
 ##
 
 class VoxelHead(nn.Module):
@@ -29,14 +29,10 @@ class VoxelHead(nn.Module):
         self.decoder = Decoder(cfg)
         self.merger = Merger(cfg)
         
-        # initialization with trained model from Pix2Vox
-        checkpoint = torch.load(cfg.PRETRAINED_MODEL)
-        encoder_state = clean_state_dict(checkpoint['encoder_state_dict'])
-        self.encoder.load_state_dict(encoder_state, strict=False)
-        decoder_state = clean_state_dict(checkpoint['decoder_state_dict'])
-        self.decoder.load_state_dict(decoder_state)
-        merger_state = clean_state_dict(checkpoint['merger_state_dict'])
-        self.merger.load_state_dict(merger_state)
+        # initialization
+        self.encoder.apply(init_weights)
+        self.decoder.apply(init_weights)
+        self.merger.apply(init_weights)
         
     def forward(self, x):
         # x  torch.Size([batch_size, n_views, img_c, img_h, img_w])(_,_,3,224,224)

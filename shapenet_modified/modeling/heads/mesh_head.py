@@ -5,7 +5,7 @@ from pytorch3d.ops import GraphConv, SubdivideMeshes, vert_align
 from torch.nn import functional as F
 
 from shapenet.utils.coords import project_verts
-
+from shapenet.utils.checkpoint import clean_state_dict
 
 class MeshRefinementHead(nn.Module):
     def __init__(self, cfg):
@@ -26,6 +26,10 @@ class MeshRefinementHead(nn.Module):
                 input_channels, vert_feat_dim, hidden_dim, stage_depth, gconv_init=graph_conv_init
             )
             self.stages.append(stage)
+        # initialization with trained model from Mesh RCNN    
+        checkpoint = torch.load(cfg.PRETRAINED_MODEL2)
+        checkpoint1 = clean_state_dict(checkpoint['best_states']['model'])
+        self.stages.load_state_dict(checkpoint1, strict=False)
 
     def forward(self, img_feats, meshes, P=None, subdivide=False):
         """
@@ -62,6 +66,7 @@ class MeshRefinementStage(nn.Module):
           hidden_dim (int): Output dimension for graph-conv layers
           stage_depth (int): Number of graph-conv layers to use
           gconv_init (int): Specifies weight initialization for graph-conv layers
+          checkpoint : trained model from Mesh RCNN
         """
         super(MeshRefinementStage, self).__init__()
         
@@ -79,12 +84,13 @@ class MeshRefinementStage(nn.Module):
             self.gconvs.append(gconv)
 
         # initialization for bottleneck and vert_offset
-        nn.init.normal_(self.bottleneck.weight, mean=0.0, std=0.01)
-        nn.init.constant_(self.bottleneck.bias, 0)
+#         nn.init.normal_(self.bottleneck.weight, mean=0.0, std=0.01)
+#         nn.init.constant_(self.bottleneck.bias, 0)
 
-        nn.init.zeros_(self.vert_offset.weight)
-        nn.init.constant_(self.vert_offset.bias, 0)
-
+#         nn.init.zeros_(self.vert_offset.weight)
+#         nn.init.constant_(self.vert_offset.bias, 0)
+    
+        
     def forward(self, img_feats, meshes, vert_feats=None, P=None):
         """
         Args:

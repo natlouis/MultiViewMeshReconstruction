@@ -7,8 +7,11 @@ from pytorch3d.structures import Meshes
 from pytorch3d.utils import ico_sphere
 
 from shapenet.modeling.backbone import build_backbone
-from shapenet.modeling.heads import MeshRefinementHead, VoxelHead
+from shapenet.modeling.heads import MeshRefinementHead
+from shapenet.modeling.heads.voxel_head_ResNet import VoxelHead
 from shapenet.utils.coords import get_blender_intrinsic_matrix, voxel_to_world
+from shapenet.modeling.models.merger import Merger
+from shapenet.utils.network_utils import init_weights
 
 MESH_ARCH_REGISTRY = Registry("MESH_ARCH")
 
@@ -26,13 +29,16 @@ class VoxMeshHead(nn.Module):
 
         self.register_buffer("K", get_blender_intrinsic_matrix())
         # backbone
-        self.backbone, feat_dims = build_backbone(backbone)
+        self.backbone, feat_dims, feat_dims1 = build_backbone(backbone)
         # voxel head
         cfg.MODEL.VOXEL_HEAD.COMPUTED_INPUT_CHANNELS = feat_dims[-1]
         self.voxel_head = VoxelHead(cfg)
-    
+        
+        # merger
+        self.merger = Merger(cfg)
+        self.merger.apply(init_weights)
         # mesh head
-        cfg.MODEL.MESH_HEAD.COMPUTED_INPUT_CHANNELS = sum(feat_dims)
+        cfg.MODEL.MESH_HEAD.COMPUTED_INPUT_CHANNELS = sum(feat_dims1)
         self.mesh_head = MeshRefinementHead(cfg)
 
     def _get_projection_matrix(self, N, device):
@@ -57,7 +63,6 @@ class VoxMeshHead(nn.Module):
             if voxels_per_mesh[i] == 0:
                 print('ERROR is here')
                 voxel_probs[i, start:stop, start:stop, start:stop] = 1
-        print('!')
         meshes = cubify(voxel_probs, self.cubify_threshold)
 
         meshes = self._add_dummies(meshes)
@@ -78,21 +83,59 @@ class VoxMeshHead(nn.Module):
         return Meshes(verts=verts_list, faces=faces_list)
 
     def forward(self, imgs, voxel_only=False):
+        # imgs [batch_size, n_views, img_c, img_h, img_w] (_,_,3,137,137)
         N = imgs.shape[0]
         device = imgs.device
+        
+        imgs = imgs.permute(1, 0, 2, 3, 4).contiguous()
+        imgs = torch.split(imgs, 1, dim=0)
+        feat1 = []
+        feat2 = []
+        feat3 = []
+        raw_features = []
+        gen_volumes = []
+        for img in imgs:
+            img_feats = self.backbone(img.squeeze(0))
+            # img_feats: a list of 4 tensors
+            feat1.append(img_feats[0])
+            feat2.append(img_feats[1])
+            feat3.append(img_feats[2])
+            raw_feature, gen_volume = self.voxel_head(img_feats[-1])
+            gen_volumes.append(torch.squeeze(gen_volume, dim=1))
+            raw_features.append(raw_feature)
+            
+            
+        feat1 = torch.stack(feat1).permute(1, 0, 2, 3, 4).contiguous() 
+        feat2 = torch.stack(feat2).permute(1, 0, 2, 3, 4).contiguous() 
+        feat3 = torch.stack(feat3).permute(1, 0, 2, 3, 4).contiguous() 
+        
+        feat1_mean = torch.mean(feat1, 1, True).squeeze(1)
+        feat1_std = torch.std(feat1, 1, True).squeeze(1)
+        feat1_max = torch.max(feat1, 1, True)[0].squeeze(1)
+        
+        feat2_mean = torch.mean(feat2, 1, True).squeeze(1)
+        feat2_std = torch.std(feat2, 1, True).squeeze(1)
+        feat2_max = torch.max(feat2, 1, True)[0].squeeze(1)
+        
+        feat3_mean = torch.mean(feat3, 1, True).squeeze(1)
+        feat3_std = torch.std(feat3, 1, True).squeeze(1)
+        feat3_max = torch.max(feat3, 1, True)[0].squeeze(1)
+        
+        static_feats = [feat1_mean, feat1_std, feat1_max, feat2_mean, feat2_std, feat2_max, feat3_mean, feat3_std, feat3_max] 
+#         print(raw_features[0].shape)
+        raw_features = torch.stack(raw_features).permute(1, 0, 2, 3, 4, 5).contiguous() 
+        gen_volumes = torch.stack(gen_volumes).permute(1, 0, 2, 3, 4).contiguous()
+        voxel_scores = self.merger(raw_features, gen_volumes)
 
-        img_feats = self.backbone(imgs)
-
-        voxel_scores = self.voxel_head(img_feats[-1])
         P = self._get_projection_matrix(N, device)
 
         if voxel_only:
             dummy_meshes = self._dummy_mesh(N, device)
-            dummy_refined = self.mesh_head(img_feats, dummy_meshes, P)
+            dummy_refined = self.mesh_head(static_feats, dummy_meshes, P)
             return voxel_scores, dummy_refined
 
         cubified_meshes = self.cubify(voxel_scores)
-        refined_meshes = self.mesh_head(img_feats, cubified_meshes, P)
+        refined_meshes = self.mesh_head(static_feats, cubified_meshes, P)
         return voxel_scores, refined_meshes
 
 

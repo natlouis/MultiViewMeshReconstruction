@@ -14,16 +14,16 @@ class ResNetBackbone(nn.Module):
         self.stage4 = net.layer4
 
     def forward(self, imgs):
-        feats = self.stem(imgs)
-        conv1 = self.stage1(feats)  # 18, 34: 64
+        # imgs (N, 3, 137, 137)
+        feats = self.stem(imgs) 
+        conv1 = self.stage1(feats) 
         conv2 = self.stage2(conv1)
-        conv3 = self.stage3(conv2)
-        conv4 = self.stage4(conv3)
+        conv3 = self.stage3(conv2) 
+        conv4 = self.stage4(conv3) #(N, 512, 7, 7)
 
         return [conv1, conv2, conv3, conv4]
 
-
-_FEAT_DIMS = {
+_FEAT_DIMS = {  
     "resnet18": (64, 128, 256, 512),
     "resnet34": (64, 128, 256, 512),
     "resnet50": (256, 512, 1024, 2048),
@@ -31,13 +31,19 @@ _FEAT_DIMS = {
     "resnet152": (256, 512, 1024, 2048),
 }
 
+_FEAT_DIMS1 = {
+    "resnet18": (64, 64, 64, 128, 128, 128, 256, 256, 256),
+    "resnet34": (64, 64, 64, 128, 128, 128, 256, 256, 256),
+}
 
 def build_backbone(name, pretrained=True):
-    resnets = ["resnet18", "resnet34", "resnet50", "resnet101", "resnet152"]
+#     resnets = ["resnet18", "resnet34", "resnet50", "resnet101", "resnet152"]
+    resnets = ["resnet18", "resnet34"]
     if name in resnets and name in _FEAT_DIMS:
         cnn = getattr(torchvision.models, name)(pretrained=pretrained)
         backbone = ResNetBackbone(cnn)
         feat_dims = _FEAT_DIMS[name]
-        return backbone, feat_dims
+        feat_dims1 = _FEAT_DIMS1[name]
+        return backbone, feat_dims, feat_dims1
     else:
         raise ValueError('Unrecognized backbone type "%s"' % name)
