@@ -35,7 +35,7 @@ def evaluate_test(model, data_loader, vis_preds=False):
         "04530566": "watercraft",
         "02691156": "plane",
         "02933112": "cabinet",
-#         "02958343": "car",
+        "02958343": "car",
         "03211117": "monitor",
         "04256520": "couch",
         "04401088": "cellphone",
@@ -51,13 +51,14 @@ def evaluate_test(model, data_loader, vis_preds=False):
     num_batch_evaluated = 0
     for batch in data_loader:
         batch = data_loader.postprocess(batch, device)
-        imgs, meshes_gt, _, _, _, id_strs = batch
+        #imgs, meshes_gt, _, _, _, id_strs = batch
+        imgs, meshes_gt, _, _, _, id_strs, _imgs = batch
         sids = [id_str.split("-")[0] for id_str in id_strs]
         for sid in sids:
             num_instances[sid] += 1
 
         with inference_context(model):
-            voxel_scores, meshes_pred = model(imgs)
+            voxel_scores, meshes_pred = model(_imgs) #NOTE: Evaluating on multi-view b/c of errors, but need to evaluate on single-view for good comparison 
             cur_metrics = compare_meshes(meshes_pred[-1], meshes_gt, reduce=False)
             cur_metrics["verts_per_mesh"] = meshes_pred[-1].num_verts_per_mesh().cpu()
             cur_metrics["faces_per_mesh"] = meshes_pred[-1].num_faces_per_mesh().cpu()
@@ -174,8 +175,10 @@ def evaluate_split(
     deprocess = imagenet_deprocess(rescale_image=False)
     for batch in loader:
         batch = loader.postprocess(batch, device)
-        imgs, meshes_gt, points_gt, normals_gt, voxels_gt = batch
-        voxel_scores, meshes_pred = model(imgs)
+        #imgs, meshes_gt, points_gt, normals_gt, voxels_gt = batch
+        imgs, meshes_gt, points_gt, normals_gt, voxels_gt, _imgs = batch
+
+        voxel_scores, meshes_pred = model(_imgs) #NOTE: Only using multi-view b/c of errors, need single-view for proper comparison 
 
         # Only compute metrics for the final predicted meshes, not intermediates
         cur_metrics = compare_meshes(meshes_pred[-1], meshes_gt)

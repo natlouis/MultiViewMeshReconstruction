@@ -44,6 +44,9 @@ class Encoder(torch.nn.Module):
        
     def forward(self, rendering_images):
         # print(rendering_images.size())  # torch.Size([batch_size, n_views, img_c, img_h, img_w])
+        if rendering_images.dim() == 4: #Single-image input only [batch_size, img_c, img_h, img_w]
+            rendering_images.unsqueeze_(1)
+            
         rendering_images = rendering_images.permute(1, 0, 2, 3, 4).contiguous()
         rendering_images = torch.split(rendering_images, 1, dim=0)
         feats1 = []

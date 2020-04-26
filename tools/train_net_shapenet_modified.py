@@ -59,6 +59,7 @@ def main_worker_eval(worker_id, args):
     cp = torch.load(PathManager.get_local_path(cfg.MODEL.CHECKPOINT))
     state_dict = clean_state_dict(cp["best_states"]["model"])
     model = build_model(cfg)
+
     model.load_state_dict(state_dict)
     logger.info("Model loaded")
     model.to(device)
@@ -126,6 +127,19 @@ def main_worker(worker_id, args):
         model.load_state_dict(cp.latest_states["model"])
         optimizer.load_state_dict(cp.latest_states["optim"])
         scheduler.load_state_dict(cp.latest_states["lr_scheduler"])
+
+    if not cfg.PRETRAINED_MODEL2 == "":
+        # initialization with trained model from Mesh RCNN
+        checkpoint = torch.load(cfg.PRETRAINED_MODEL2)
+
+        checkpoint1 = clean_state_dict(checkpoint['best_states']['model'])
+
+        #Because output voxel size is 32 vs 48, we can't load some mesh heads
+        del checkpoint1['mesh_head.stages.0.bottleneck.weight']
+        del checkpoint1['mesh_head.stages.1.bottleneck.weight']
+        del checkpoint1['mesh_head.stages.2.bottleneck.weight']
+
+        model.load_state_dict(checkpoint1, strict=False)
 
     training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn)
 
