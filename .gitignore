@@ -37,3 +37,4 @@ dist/
 # project dirs
 /datasets
 /models
+/wandb
