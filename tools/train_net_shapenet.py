@@ -13,6 +13,8 @@ from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.logger import setup_logger
 from fvcore.common.file_io import PathManager
 
+from ..loss_prediction_module import LossPredictionModule
+
 import numpy as np
 
 from shapenet.config import get_shapenet_cfg
@@ -44,6 +46,7 @@ logger = logging.getLogger("shapenet")
 
 dataset = "MeshVox"
 #dataset = "MeshVoxMulti"
+
 
 def copy_data(args):
     data_base, data_ext = os.path.splitext(os.path.basename(args.data_dir))
@@ -145,13 +148,13 @@ def main_worker(worker_id, args):
         optimizer.load_state_dict(cp.latest_states["optim"])
         scheduler.load_state_dict(cp.latest_states["lr_scheduler"])
 
-    #Use pretrained voxmesh weights if supplied
+    # Use pretrained voxmesh weights if supplied
     if not cfg.MODEL.CHECKPOINT == "":
         saved_weights = torch.load(PathManager.get_local_path(cfg.MODEL.CHECKPOINT))
         logger.info("Loading model from checkpoint: %s" % (cfg.MODEL.CHECKPOINT))
 
         state_dict = clean_state_dict(saved_weights["best_states"]["model"])
-        model.load_state_dict(state_dict) 
+        model.load_state_dict(state_dict)
 
     training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn)
 
@@ -170,6 +173,11 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
     else:
         params = list(model.parameters())
     loss_moving_average = cp.data.get("loss_moving_average", None)
+
+    # Zhengyuan modification
+    loss_predictor = LossPredictionModule()
+    loss_pred_optim = torch.optim.SGD(loss_predictor.parameters(), lr = 1e-3, momentum=0.9)
+
     while cp.epoch < cfg.SOLVER.NUM_EPOCHS:
         if comm.is_main_process():
             logger.info("Starting epoch %d / %d" % (cp.epoch + 1, cfg.SOLVER.NUM_EPOCHS))
@@ -180,17 +188,17 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             if hasattr(loader.sampler, "set_epoch"):
                 loader.sampler.set_epoch(cp.epoch)
 
-	#Config settings for renderer
+        # Config settings for renderer
         blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
         raster_settings = RasterizationSettings(
-                    image_size=256,
-                    blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma,
-                    faces_per_pixel=50,
-                    )
+            image_size=256,
+            blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma,
+            faces_per_pixel=50,
+        )
         rot_y_90 = torch.tensor([[0, 0, 1, 0],
-                                    [0, 1, 0, 0],
-                                    [-1, 0, 0, 0],
-                                    [0, 0, 0, 1]]).float().to(device)
+                                 [0, 1, 0, 0],
+                                 [-1, 0, 0, 0],
+                                 [0, 0, 0, 1]]).float().to(device)
 
         for i, batch in enumerate(loaders["train"]):
             if i == 0:
@@ -204,8 +212,8 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             else:
                 imgs, meshes_gt, points_gt, normals_gt, voxels_gt = batch
 
-            #NOTE: _imgs contains all of the other images in belonging to this model
-            #We have to select the next-best-view from that list of images
+            # NOTE: _imgs contains all of the other images in belonging to this model
+            # We have to select the next-best-view from that list of images
 
             num_infinite_params = 0
             for p in params:
@@ -229,42 +237,47 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 logger.info("ERROR: Got %d non-finite verts" % num_infinite)
                 return
 
-            total_silh_loss = torch.tensor(0.) #Total silhouette loss, to be added to "loss" below
-            if not meshes_gt is None and not model_kwargs.get("voxel_only", False): #Voxel only training for first few iterations
+            total_silh_loss = torch.tensor(0.)  # Total silhouette loss, to be added to "loss" below
+            # Voxel only training for first few iterations
+            if not meshes_gt is None and not model_kwargs.get("voxel_only", False):
                 _meshes_pred = meshes_pred[-1].clone()
-                _meshes_gt   = meshes_gt[-1].clone()
+                _meshes_gt = meshes_gt[-1].clone()
 
                 # Render masks from predicted mesh for each view
-                #GT probability map to supervise prediction module
+                # GT probability map to supervise prediction module
                 B = len(meshes_gt)
-                probability_map = 0.01*torch.ones((B, 24)) #batch size x 24
+                probability_map = 0.01 * torch.ones((B, 24))  # batch size x 24
                 for b, (cur_gt_mesh, cur_pred_mesh) in enumerate(zip(meshes_gt, _meshes_pred)):
-                    #Maybe computationally expensive, but need to transform back to world space based on rendered image viewpoint
+                    # Maybe computationally expensive, but need to transform back to world space based on rendered image viewpoint
                     RT = RTs[b]
-                    invRT = torch.inverse(RT.mm(rot_y_90)) #Rotate 90 degrees about y-axis and invert
-                    invRT_no_rot = torch.inverse(RT) #Just invert 
+                    # Rotate 90 degrees about y-axis and invert
+                    invRT = torch.inverse(RT.mm(rot_y_90))
+                    invRT_no_rot = torch.inverse(RT)  # Just invert
 
-                    cur_pred_mesh._verts_list[0] = project_verts(cur_pred_mesh._verts_list[0], invRT)
+                    cur_pred_mesh._verts_list[0] = project_verts(
+                        cur_pred_mesh._verts_list[0], invRT)
                     sid = id_strs[b].split('-')[0]
 
-                    #For some strange reason all classes (expect vehicle class) require a 90 degree rotation about the y-axis 
+                    # For some strange reason all classes (expect vehicle class) require a 90 degree rotation about the y-axis
                     if sid == '02958343':
-                        cur_gt_mesh._verts_list[0] = project_verts(cur_gt_mesh._verts_list[0], invRT_no_rot)
+                        cur_gt_mesh._verts_list[0] = project_verts(
+                            cur_gt_mesh._verts_list[0], invRT_no_rot)
                     else:
-                        cur_gt_mesh._verts_list[0] = project_verts(cur_gt_mesh._verts_list[0], invRT)
+                        cur_gt_mesh._verts_list[0] = project_verts(
+                            cur_gt_mesh._verts_list[0], invRT)
 
                     for iid in range(len(render_RTs[b])):
 
-                        R = render_RTs[b][iid][:3,:3].unsqueeze(0)
-                        T = render_RTs[b][iid][:3,3].unsqueeze(0)
+                        R = render_RTs[b][iid][:3, :3].unsqueeze(0)
+                        T = render_RTs[b][iid][:3, 3].unsqueeze(0)
                         cameras = OpenGLPerspectiveCameras(device=device, R=R, T=T)
                         silhouette_renderer = MeshRenderer(
-                                    rasterizer=MeshRasterizer(
-                                    cameras=cameras,
-                                    raster_settings=raster_settings
-                                    ),
-                                shader=SoftSilhouetteShader(blend_params=blend_params)
-                                )
+                            rasterizer=MeshRasterizer(
+                                cameras=cameras,
+                                raster_settings=raster_settings
+                            ),
+                            shader=SoftSilhouetteShader(blend_params=blend_params)
+                        )
 
                         ref_image = silhouette_renderer(meshes_world=cur_gt_mesh, R=R, T=T)
                         image = silhouette_renderer(meshes_world=cur_pred_mesh, R=R, T=T)
@@ -278,18 +291,19 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                         plt.show()
                         '''
 
-                        #MSE Loss between both silhouettes
-                        silh_loss = torch.sum((image[0,:,:,3] - ref_image[0,:,:,3]) ** 2)
-                        probability_map[b,iid] = silh_loss.detach()
+                        # MSE Loss between both silhouettes
+                        silh_loss = torch.sum((image[0, :, :, 3] - ref_image[0, :, :, 3]) ** 2)
+                        probability_map[b, iid] = silh_loss.detach()
 
-                        total_silh_loss += silh_loss 
+                        total_silh_loss += silh_loss
 
-                probability_map = torch.nn.functional.softmax(probability_map, dim=1) #Softmax across images
-                nbv_idx = torch.argmax(probability_map, dim=1) #Next-best view indices
-                nbv_imgs = _imgs[torch.arange(B),nbv_idx] #Next-best view images
-                 
-                #NOTE: Do a second forward pass through the model? This time for multi-view reconstruction
-                #The input should be the first image and the next-best view 
+                probability_map = torch.nn.functional.softmax(
+                    probability_map, dim=1)  # Softmax across images
+                nbv_idx = torch.argmax(probability_map, dim=1)  # Next-best view indices
+                nbv_imgs = _imgs[torch.arange(B), nbv_idx]  # Next-best view images
+
+                # NOTE: Do a second forward pass through the model? This time for multi-view reconstruction
+                # The input should be the first image and the next-best view
                 #voxel_scores, meshes_pred = model(nbv_imgs, **model_kwargs)
 
             loss, losses = None, {}
@@ -302,10 +316,10 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 logger.info("WARNING: Got non-finite loss %f" % loss)
                 skip = True
 
-            #Add silhouette loss to total loss
-            silh_weight = 1.0 #TODO: Add a weight for the silhouette loss?
-            loss = loss + total_silh_loss * silh_weight 
-            losses['silhouette'] = total_silh_loss 
+            # Add silhouette loss to total loss
+            silh_weight = 1.0  # TODO: Add a weight for the silhouette loss?
+            loss = loss + total_silh_loss * silh_weight
+            losses['silhouette'] = total_silh_loss
 
             if model_kwargs.get("voxel_only", False):
                 for k, v in losses.items():
@@ -335,7 +349,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                         str_out += ", mesh size = (%d, %d)" % (mean_V, mean_F)
                     logger.info(str_out)
 
-                #Log with Weights & Biases, comment out if not installed
+                # Log with Weights & Biases, comment out if not installed
                 wandb.log(losses)
 
             if loss_moving_average is None and loss is not None:
@@ -365,6 +379,9 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             optimizer.zero_grad()
             with Timer("Backward"):
                 loss.backward()
+
+            # Zhengyuan step loss_prediction
+            loss_predictor.train_batch(image, probability_map, loss_pred_optim)
 
             # When training with normal loss, sometimes I get NaNs in gradient that
             # cause the model to explode. Check for this before performing a gradient
