@@ -39,6 +39,7 @@ from pytorch3d.renderer import (
     PointLights
 )
 
+import wandb
 logger = logging.getLogger("shapenet")
 
 dataset = "MeshVox"
@@ -66,7 +67,7 @@ def main_worker_eval(worker_id, args):
     cfg = setup(args)
 
     # build test set
-    test_loader = build_data_loader(cfg, dataset, "test", multigpu=False)
+    test_loader = build_data_loader(cfg, dataset, "test", multigpu=False, num_workers=8)
     logger.info("test - %d" % len(test_loader))
 
     # load checkpoing and build model
@@ -80,6 +81,7 @@ def main_worker_eval(worker_id, args):
     logger.info("Model loaded")
     model.to(device)
 
+    wandb.init(project='MeshRCNN', config=cfg, name='meshrcnn-eval')
     if args.eval_p2m:
         evaluate_test_p2m(model, test_loader)
     else:
@@ -155,6 +157,10 @@ def main_worker(worker_id, args):
 
 
 def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn):
+
+    if comm.is_main_process():
+        wandb.init(project='MeshRCNN', config=cfg, name='meshrcnn')
+
     Timer.timing = False
     iteration_timer = Timer("Iteration")
 
@@ -329,6 +335,9 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                         str_out += ", mesh size = (%d, %d)" % (mean_V, mean_F)
                     logger.info(str_out)
 
+                #Log with Weights & Biases, comment out if not installed
+                wandb.log(losses)
+
             if loss_moving_average is None and loss is not None:
                 loss_moving_average = loss.item()
 
@@ -428,7 +437,7 @@ def eval_and_save(model, loaders, optimizer, scheduler, cp):
 def setup_loaders(cfg):
     loaders = {}
     loaders["train"] = build_data_loader(
-        cfg, dataset, "train", multigpu=comm.get_world_size() > 1, num_workers=6
+        cfg, dataset, "train", multigpu=comm.get_world_size() > 1, num_workers=8
     )
 
     # Since sampling the mesh is now coupled with the data loader, we need to

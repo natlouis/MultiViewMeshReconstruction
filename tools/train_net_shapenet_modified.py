@@ -23,6 +23,7 @@ from shapenet.modeling.mesh_arch_modified import build_model
 from shapenet.solver import build_lr_scheduler, build_optimizer
 from shapenet.utils import Checkpoint, Timer, clean_state_dict, default_argument_parser
 
+import wandb
 logger = logging.getLogger("shapenet")
 
 
@@ -130,6 +131,9 @@ def main_worker(worker_id, args):
 
 
 def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn):
+
+    if comm.is_main_process():
+        wandb.init(project='MeshRCNN', config=cfg)
     Timer.timing = False
     iteration_timer = Timer("Iteration")
 
@@ -218,6 +222,9 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                         mean_F = meshes_pred[-1].num_faces_per_mesh().float().mean().item()
                         str_out += ", mesh size = (%d, %d)" % (mean_V, mean_F)
                     logger.info(str_out)
+
+                    #Log with Weights & Biases, comment out if not installed
+                    wandb.log(losses)
 
             if loss_moving_average is None and loss is not None:
                 loss_moving_average = loss.item()
@@ -322,7 +329,7 @@ def eval_and_save(model, loaders, optimizer, scheduler, cp):
 def setup_loaders(cfg):
     loaders = {}
     loaders["train"] = build_data_loader(
-        cfg, "MeshVox", "train", multigpu=comm.get_world_size() > 1
+        cfg, "MeshVox", "train", multigpu=comm.get_world_size() > 1, num_workers=8
     )
 
     # Since sampling the mesh is now coupled with the data loader, we need to
