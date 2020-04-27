@@ -41,11 +41,11 @@ from pytorch3d.renderer import (
     PointLights
 )
 
-import wandb
+#import wandb
 logger = logging.getLogger("shapenet")
 
-dataset = "MeshVox"
-#dataset = "MeshVoxMulti"
+#dataset = "MeshVox"
+dataset = "MeshVoxMulti"
 
 
 def copy_data(args):
@@ -84,7 +84,7 @@ def main_worker_eval(worker_id, args):
     logger.info("Model loaded")
     model.to(device)
 
-    wandb.init(project='MeshRCNN', config=cfg, name='meshrcnn-eval')
+    #wandb.init(project='MeshRCNN', config=cfg, name='meshrcnn-eval')
     if args.eval_p2m:
         evaluate_test_p2m(model, test_loader)
     else:
@@ -156,13 +156,16 @@ def main_worker(worker_id, args):
         state_dict = clean_state_dict(saved_weights["best_states"]["model"])
         model.load_state_dict(state_dict)
 
+        for param in model.parameters():
+            param.requires_grad = False 
+
     training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn)
 
 
 def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn):
 
-    if comm.is_main_process():
-        wandb.init(project='MeshRCNN', config=cfg, name='meshrcnn')
+    #if comm.is_main_process():
+    #    wandb.init(project='MeshRCNN', config=cfg, name='meshrcnn')
 
     Timer.timing = False
     iteration_timer = Timer("Iteration")
@@ -189,9 +192,10 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 loader.sampler.set_epoch(cp.epoch)
 
         # Config settings for renderer
+        render_image_size = 256
         blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
         raster_settings = RasterizationSettings(
-            image_size=256,
+            image_size=render_image_size,
             blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma,
             faces_per_pixel=50,
         )
@@ -240,7 +244,6 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             total_silh_loss = torch.tensor(0.)  # Total silhouette loss, to be added to "loss" below
             # Voxel only training for first few iterations
             if not meshes_gt is None and not model_kwargs.get("voxel_only", False):
-                import pdb; pdb.set_trace()
                 _meshes_pred = meshes_pred[-1].clone()
                 _meshes_gt = meshes_gt[-1].clone()
 
@@ -248,6 +251,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 # GT probability map to supervise prediction module
                 B = len(meshes_gt)
                 probability_map = 0.01 * torch.ones((B, 24))  # batch size x 24
+                viewgrid = torch.zeros((B,24,render_image_size,render_image_size)).to(device) # batch size x 24 x H x W
                 for b, (cur_gt_mesh, cur_pred_mesh) in enumerate(zip(meshes_gt, _meshes_pred)):
                     # Maybe computationally expensive, but need to transform back to world space based on rendered image viewpoint
                     RT = RTs[b]
@@ -283,6 +287,8 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                         ref_image = silhouette_renderer(meshes_world=cur_gt_mesh, R=R, T=T)
                         image = silhouette_renderer(meshes_world=cur_pred_mesh, R=R, T=T)
 
+                        #Add image silhouette to viewgrid
+                        viewgrid[b,iid] = image[...,-1]
                         '''
                         import matplotlib.pyplot as plt
                         plt.subplot(1,2,1)
@@ -299,13 +305,17 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                         total_silh_loss += silh_loss
 
                 probability_map = torch.nn.functional.softmax(
-                    probability_map, dim=1)  # Softmax across images
+                    probability_map, dim=1).to(device)  # Softmax across images
                 nbv_idx = torch.argmax(probability_map, dim=1)  # Next-best view indices
                 nbv_imgs = _imgs[torch.arange(B), nbv_idx]  # Next-best view images
 
                 # NOTE: Do a second forward pass through the model? This time for multi-view reconstruction
                 # The input should be the first image and the next-best view
                 #voxel_scores, meshes_pred = model(nbv_imgs, **model_kwargs)
+
+                # Zhengyuan step loss_prediction
+                loss_predictor.train_batch(viewgrid, probability_map, loss_pred_optim)
+
 
             loss, losses = None, {}
             if num_infinite == 0:
@@ -356,6 +366,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             if loss_moving_average is None and loss is not None:
                 loss_moving_average = loss.item()
 
+            '''
             # Skip backprop for this batch if the loss is above the skip factor times
             # the moving average for losses
             if loss is None:
@@ -381,21 +392,21 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
             with Timer("Backward"):
                 loss.backward()
 
-            # Zhengyuan step loss_prediction
-            loss_predictor.train_batch(image, probability_map, loss_pred_optim)
-
             # When training with normal loss, sometimes I get NaNs in gradient that
             # cause the model to explode. Check for this before performing a gradient
             # update. This is safe in mult-GPU since gradients have already been
             # summed, so each GPU has the same gradients.
             num_infinite_grad = 0
             for p in params:
+                if p.requires_grad == False or p.grad is None:
+                    continue 
                 num_infinite_grad += (torch.isfinite(p.grad) == 0).sum().item()
             if num_infinite_grad == 0:
                 optimizer.step()
             else:
                 msg = "WARNING: Got %d non-finite elements in gradient; skipping update"
                 logger.info(msg % num_infinite_grad)
+            '''
             cp.step()
 
             if cp.t % cfg.SOLVER.CHECKPOINT_PERIOD == 0:
