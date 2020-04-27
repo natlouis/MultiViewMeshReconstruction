@@ -179,7 +179,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
 
     # Zhengyuan modification
     loss_predictor = LossPredictionModule().to(device)
-    loss_pred_optim = torch.optim.SGD(loss_predictor.parameters(), lr = 1e-3, momentum=0.9)
+    loss_pred_optim = torch.optim.SGD(loss_predictor.parameters(), lr = 1e-5, momentum=0.9)
 
     while cp.epoch < cfg.SOLVER.NUM_EPOCHS:
         if comm.is_main_process():
@@ -250,7 +250,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                 # Render masks from predicted mesh for each view
                 # GT probability map to supervise prediction module
                 B = len(meshes_gt)
-                probability_map = 0.01 * torch.ones((B, 24))  # batch size x 24
+                probability_map = 0.01 * torch.ones((B, 24)).to(device)  # batch size x 24
                 viewgrid = torch.zeros((B,24,render_image_size,render_image_size)).to(device) # batch size x 24 x H x W
                 for b, (cur_gt_mesh, cur_pred_mesh) in enumerate(zip(meshes_gt, _meshes_pred)):
                     # Maybe computationally expensive, but need to transform back to world space based on rendered image viewpoint
@@ -304,8 +304,9 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
 
                         total_silh_loss += silh_loss
 
-                probability_map = torch.nn.functional.softmax(
-                    probability_map, dim=1).to(device)  # Softmax across images
+            #    probability_map = torch.nn.functional.softmax(
+            #        probability_map, dim=1).to(device)  # Softmax across images
+                probability_map = probability_map/(torch.max(probability_map, dim=1)[0].unsqueeze(1))   # Normalize instead of softmax
                 nbv_idx = torch.argmax(probability_map, dim=1)  # Next-best view indices
                 nbv_imgs = _imgs[torch.arange(B), nbv_idx]  # Next-best view images
 
@@ -361,7 +362,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                     logger.info(str_out)
 
                 # Log with Weights & Biases, comment out if not installed
-                wandb.log(losses)
+                #wandb.log(losses)
 
             if loss_moving_average is None and loss is not None:
                 loss_moving_average = loss.item()
