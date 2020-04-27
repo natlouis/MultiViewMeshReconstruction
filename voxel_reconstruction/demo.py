@@ -52,19 +52,23 @@ class Visualization_demo():
         self.output_dir = output_dir
         
 
-    def run_on_images(self,imgs, idx, sampled_idx):
+    def run_on_images(self,imgs, sid, mid, iid, sampled_idx):
+        dir1 = os.path.join(output_dir,str(sid),str(mid))
+        if not os.path.exists(dir1):
+            os.makedirs(dir1)
+           
         deprocess = imagenet_deprocess(rescale_image=False)
         image_features = self.encoder(imgs)
         raw_features, generated_volume = self.decoder(image_features)
         generated_volume = self.merger(raw_features, generated_volume)
         generated_volume = self.refiner(generated_volume)
         img = image_to_numpy(deprocess(imgs[0][0]))
-        save_img = os.path.join(self.output_dir, "%06d.png" % (idx))
+        save_img = os.path.join(dir1, "%06d.png" % (iid))
         cv2.imwrite(save_img, img[:, :, ::-1])
         img1 = image_to_numpy(deprocess(imgs[0][1]))
-        save_img1 = os.path.join(self.output_dir, "%06d.png" % (sampled_idx))
+        save_img1 = os.path.join(dir1, "%06d.png" % (sampled_idx))
         cv2.imwrite(save_img1, img1[:, :, ::-1])
-        get_volume_views(generated_volume, self.output_dir, idx)
+        get_volume_views(generated_volume, dir1, iid)
 
 def clean_state_dict(state_dict):
     out = {}
@@ -93,14 +97,18 @@ if __name__ == "__main__":
     idx = int(args.index)
     output_dir = args.output_dir
     
-    dataset = ShapeNetDataset(data_dir)
-    item = dataset[idx] # img, verts, faces, points, normals, voxels, P, id_str, imgs, sampled_idx
-    imgs = item[-2]
+    dataset = ShapeNetDataset(cfg, data_dir)
+    item = dataset[idx] # img, verts, faces, points, normals, voxels, P, id_str, imgs, sid, mid, iid, sampled_idx
+    imgs = item[-5]
     imgs = imgs.unsqueeze(0) # (1,2,3,224,224)
+#     print(imgs.shape)
+    sid = item[-4]
+    mid = item[-3]
+    iid = item[-2]
     sampled_idx = item[-1]
     
     demo = Visualization_demo(cfg, output_dir=output_dir)
-    demo.run_on_images(imgs, idx, sampled_idx)
+    demo.run_on_images(imgs, sid, mid, iid, sampled_idx)
     logger.info("Reconstruction saved in %s" % (args.output_dir))
     
     

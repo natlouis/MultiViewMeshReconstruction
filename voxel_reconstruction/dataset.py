@@ -7,9 +7,14 @@ from pytorch3d.ops import sample_points_from_meshes
 from pytorch3d.structures import Meshes
 from torch.utils.data import Dataset
 
-import torchvision.transforms as T
+# import torchvision.transforms as T
 from PIL import Image
 from dataset_utils import imagenet_preprocess
+
+import utils.data_transforms
+
+import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +22,7 @@ logger = logging.getLogger(__name__)
 class ShapeNetDataset(Dataset):
     def __init__(
         self,
+        cfg,
         data_dir,
         normalize_images=True,
         split=None,
@@ -26,7 +32,7 @@ class ShapeNetDataset(Dataset):
         sample_online=False,
         in_memory=False,
         return_id_str=False,
-        input_size = 224
+#         input_size = 224
     ):
 
         super(ShapeNetDataset, self).__init__()
@@ -45,13 +51,18 @@ class ShapeNetDataset(Dataset):
         self.mid_to_samples = {}
         self.mid_to_idx = {} #each entry holds a list of indices that belong to that model
 
-#         transform = [T.ToTensor()]
-#         if normalize_images:
-#             transform.append(imagenet_preprocess())
-#         self.transform = T.Compose(transform)
-        self.transform = T.Compose([T.Resize(input_size), 
-                                    T.ToTensor(), 
-                                    imagenet_preprocess()])
+#         self.transform = T.Compose([T.Resize(input_size), 
+#                                     T.ToTensor(), 
+#                                     imagenet_preprocess()])
+    
+        IMG_SIZE = cfg.CONST.IMG_H, cfg.CONST.IMG_W
+        CROP_SIZE = cfg.CONST.CROP_IMG_H, cfg.CONST.CROP_IMG_W
+        self.transform = utils.data_transforms.Compose([
+            utils.data_transforms.CenterCrop(IMG_SIZE, CROP_SIZE),
+            utils.data_transforms.RandomBackground(cfg.TEST.RANDOM_BG_COLOR_RANGE),
+            utils.data_transforms.Normalize(mean=cfg.DATASET.MEAN, std=cfg.DATASET.STD),
+            utils.data_transforms.ToTensor(),
+        ])
 
         summary_json = os.path.join(data_dir, "summary.json")
         with open(summary_json, "r") as f:
@@ -103,11 +114,12 @@ class ShapeNetDataset(Dataset):
         RT = metadata["extrinsics"][iid]
         img_path = metadata["image_list"][iid]
         img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
-
+        
+        img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 255
         # Load the image
-        with open(img_path, "rb") as f:
-            img = Image.open(f).convert("RGB")
-        img = self.transform(img)
+#         with open(img_path, "rb") as f:
+#             img = Image.open(f).convert("RGB")
+#         img = self.transform(img)
 
         # All other images for this model
         _iids = [self.image_ids[i] for i in self.mid_to_idx[mid] if i != idx]
@@ -121,11 +133,18 @@ class ShapeNetDataset(Dataset):
             
         _img_path = metadata["image_list"][sampled_idx.item()]
         _img_path = os.path.join(self.data_dir, sid, mid, "images", _img_path)
+        _img = cv2.imread(_img_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 255
         
-        with open(_img_path, "rb") as f:
-            _img = Image.open(f).convert("RGB")
-            _img = self.transform(_img)
-        imgs = torch.stack([img,_img]) # tensor([2,3,224,224])
+#         with open(_img_path, "rb") as f:
+#             _img = Image.open(f).convert("RGB")
+#             _img = self.transform(_img)
+#         imgs = torch.stack([img,_img]) # tensor([2,3,224,224])
+        imgs = []
+        imgs.append(img)
+        imgs.append(_img)
+
+        imgs = self.transform(imgs)
+        
         
 #         for _iid in sampled_idxs:
 #             img_path = metadata["image_list"][_iid]
@@ -176,7 +195,7 @@ class ShapeNetDataset(Dataset):
                 P = K.mm(RT)
 
         id_str = "%s-%s-%02d" % (sid, mid, iid)
-        return img, verts, faces, points, normals, voxels, P, id_str, imgs, sampled_idx
+        return img, verts, faces, points, normals, voxels, P, id_str, imgs, sid, mid, iid, sampled_idx
 
     def _voxelize(self, voxel_coords, P):
         V = self.voxel_size
