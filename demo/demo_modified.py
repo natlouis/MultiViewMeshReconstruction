@@ -87,7 +87,6 @@ class VisualizationDemo(object):
         render_RTs = render_metadata['extrinsics']
 
         plt.figure(figsize=(10, 10))
-        #R, T = look_at_view_transform(dist=0.742719815206*1.75, elev=27.0590432267, azim=-19.5372820907)
         R = render_RTs[iid][:3,:3].unsqueeze(0)
         T = render_RTs[iid][:3,3].unsqueeze(0)
         cameras = OpenGLPerspectiveCameras(R=R, T=T)
@@ -95,7 +94,7 @@ class VisualizationDemo(object):
         #Phong Renderer
         lights = PointLights(location=[[0.0, 0.0, -3.0]])
         raster_settings = RasterizationSettings(
-            image_size=137, 
+            image_size=256, 
             blur_radius=0.0, 
             faces_per_pixel=1, 
             bin_size=0
@@ -111,9 +110,9 @@ class VisualizationDemo(object):
         #Silhouette Renderer
         blend_params = BlendParams(sigma=1e-4, gamma=1e-4)
         raster_settings = RasterizationSettings(
-            image_size=137, 
+            image_size=256, 
             blur_radius=np.log(1. / 1e-4 - 1.) * blend_params.sigma, 
-            faces_per_pixel=250, 
+            faces_per_pixel=50, 
         )   
         silhouette_renderer = MeshRenderer(
             rasterizer=MeshRasterizer(
@@ -143,8 +142,8 @@ class VisualizationDemo(object):
 
         img = image_to_numpy(deprocess(image[0]))
         mesh_image = phong_renderer(meshes_world=mesh, R=R, T=T)
-        gt_silh_image = silhouette_renderer(meshes_world=gt_mesh, R=R, T=T)
-        silhouette_image = silhouette_renderer(meshes_world=mesh, R=R, T=T)
+        gt_silh_image = (silhouette_renderer(meshes_world=gt_mesh, R=R, T=T)>0).float()
+        silhouette_image = (silhouette_renderer(meshes_world=mesh, R=R, T=T)>0).float()
 
         plt.subplot(2,2,1)
         plt.imshow(img)
