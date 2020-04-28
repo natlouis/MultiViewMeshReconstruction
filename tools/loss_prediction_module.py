@@ -23,9 +23,11 @@ class LossPredictionModule(nn.Module):
         optimizer.zero_grad()
         gt_prob_map.requires_grad = False
         loss = F.mse_loss(pred_prob_map, gt_prob_map, reduction="sum")
-        print("loss prediction mse loss:", loss)
+        #print("loss prediction mse loss:", loss)
         loss.backward()
         optimizer.step()
+        
+        return loss
 
 
 def demo():

@@ -11,6 +11,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 from detectron2.utils.collect_env import collect_env_info
 from detectron2.utils.logger import setup_logger
+from detectron2.evaluation import inference_context
 from fvcore.common.file_io import PathManager
 
 from loss_prediction_module import LossPredictionModule
@@ -153,11 +154,9 @@ def main_worker(worker_id, args):
         saved_weights = torch.load(PathManager.get_local_path(cfg.MODEL.CHECKPOINT))
         logger.info("Loading model from checkpoint: %s" % (cfg.MODEL.CHECKPOINT))
 
-        state_dict = clean_state_dict(saved_weights["best_states"]["model"])
+        state_dict = saved_weights["best_states"]["model"]
+        state_dict = clean_state_dict(state_dict) #remove .module from key names
         model.load_state_dict(state_dict)
-
-        for param in model.parameters():
-            param.requires_grad = False 
 
     training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn)
 
@@ -165,7 +164,7 @@ def main_worker(worker_id, args):
 def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn):
 
     #if comm.is_main_process():
-    #    wandb.init(project='MeshRCNN', config=cfg, name='meshrcnn')
+    #    wandb.init(project='MeshRCNN', config=cfg, name='prediction_module')
 
     Timer.timing = False
     iteration_timer = Timer("Iteration")
@@ -179,7 +178,7 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
 
     # Zhengyuan modification
     loss_predictor = LossPredictionModule().to(device)
-    loss_pred_optim = torch.optim.SGD(loss_predictor.parameters(), lr = 1e-5, momentum=0.9)
+    loss_pred_optim = torch.optim.Adam(loss_predictor.parameters(), lr = 1e-5)
 
     while cp.epoch < cfg.SOLVER.NUM_EPOCHS:
         if comm.is_main_process():
@@ -212,34 +211,19 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
 
             batch = loaders["train"].postprocess(batch, device)
             if dataset == 'MeshVoxMulti':
-                imgs, meshes_gt, points_gt, normals_gt, voxels_gt, id_strs, _imgs, render_RTs, RTs = batch
+                imgs, meshes_gt, points_gt, normals_gt, voxels_gt, id_strs, _, render_RTs, RTs = batch
             else:
                 imgs, meshes_gt, points_gt, normals_gt, voxels_gt = batch
 
-            # NOTE: _imgs contains all of the other images in belonging to this model
-            # We have to select the next-best-view from that list of images
+            with inference_context(model):
+                # NOTE: _imgs contains all of the other images in belonging to this model
+                # We have to select the next-best-view from that list of images
 
-            num_infinite_params = 0
-            for p in params:
-                num_infinite_params += (torch.isfinite(p.data) == 0).sum().item()
-            if num_infinite_params > 0:
-                msg = "ERROR: Model has %d non-finite params (before forward!)"
-                logger.info(msg % num_infinite_params)
-                return
-
-            model_kwargs = {}
-            if cfg.MODEL.VOXEL_ON and cp.t < cfg.MODEL.VOXEL_HEAD.VOXEL_ONLY_ITERS:
-                model_kwargs["voxel_only"] = True
-            with Timer("Forward"):
-                voxel_scores, meshes_pred = model(imgs, **model_kwargs)
-
-            num_infinite = 0
-            for cur_meshes in meshes_pred:
-                cur_verts = cur_meshes.verts_packed()
-                num_infinite += (torch.isfinite(cur_verts) == 0).sum().item()
-            if num_infinite > 0:
-                logger.info("ERROR: Got %d non-finite verts" % num_infinite)
-                return
+                model_kwargs = {}
+                if cfg.MODEL.VOXEL_ON and cp.t < cfg.MODEL.VOXEL_HEAD.VOXEL_ONLY_ITERS:
+                    model_kwargs["voxel_only"] = True
+                with Timer("Forward"):
+                    voxel_scores, meshes_pred = model(imgs, **model_kwargs)
 
             total_silh_loss = torch.tensor(0.)  # Total silhouette loss, to be added to "loss" below
             # Voxel only training for first few iterations
@@ -284,8 +268,8 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
                             shader=SoftSilhouetteShader(blend_params=blend_params)
                         )
 
-                        ref_image = silhouette_renderer(meshes_world=cur_gt_mesh, R=R, T=T)
-                        image = silhouette_renderer(meshes_world=cur_pred_mesh, R=R, T=T)
+                        ref_image = (silhouette_renderer(meshes_world=cur_gt_mesh, R=R, T=T)>0).float()
+                        image = (silhouette_renderer(meshes_world=cur_pred_mesh, R=R, T=T)>0).float()
 
                         #Add image silhouette to viewgrid
                         viewgrid[b,iid] = image[...,-1]
@@ -304,110 +288,31 @@ def training_loop(cfg, cp, model, optimizer, scheduler, loaders, device, loss_fn
 
                         total_silh_loss += silh_loss
 
-            #    probability_map = torch.nn.functional.softmax(
-            #        probability_map, dim=1).to(device)  # Softmax across images
-                probability_map = probability_map/(torch.max(probability_map, dim=1)[0].unsqueeze(1))   # Normalize instead of softmax
-                nbv_idx = torch.argmax(probability_map, dim=1)  # Next-best view indices
-                nbv_imgs = _imgs[torch.arange(B), nbv_idx]  # Next-best view images
+
+                probability_map = probability_map/(torch.max(probability_map, dim=1)[0].unsqueeze(1))   # Normalize
+
+                probability_map = torch.nn.functional.softmax(probability_map, dim=1).to(device)  # Softmax across images
+                #nbv_idx = torch.argmax(probability_map, dim=1)  # Next-best view indices
+                #nbv_imgs = _imgs[torch.arange(B), nbv_idx]  # Next-best view images
 
                 # NOTE: Do a second forward pass through the model? This time for multi-view reconstruction
                 # The input should be the first image and the next-best view
                 #voxel_scores, meshes_pred = model(nbv_imgs, **model_kwargs)
 
                 # Zhengyuan step loss_prediction
-                loss_predictor.train_batch(viewgrid, probability_map, loss_pred_optim)
-
-
-            loss, losses = None, {}
-            if num_infinite == 0:
-                loss, losses = loss_fn(
-                    voxel_scores, meshes_pred, voxels_gt, (points_gt, normals_gt)
-                )
-            skip = loss is None
-            if loss is None or (torch.isfinite(loss) == 0).sum().item() > 0:
-                logger.info("WARNING: Got non-finite loss %f" % loss)
-                skip = True
-
-            # Add silhouette loss to total loss
-            silh_weight = 1.0  # TODO: Add a weight for the silhouette loss?
-            loss = loss + total_silh_loss * silh_weight
-            losses['silhouette'] = total_silh_loss
-
-            if model_kwargs.get("voxel_only", False):
-                for k, v in losses.items():
-                    if k != "voxel":
-                        losses[k] = 0.0 * v
-
-            if loss is not None and cp.t % cfg.SOLVER.LOGGING_PERIOD == 0:
+                predictor_loss = loss_predictor.train_batch(viewgrid, probability_map, loss_pred_optim)
                 if comm.is_main_process():
-                    cp.store_metric(loss=loss.item())
-                    str_out = "Iteration: %d, epoch: %d, lr: %.5f," % (
-                        cp.t,
-                        cp.epoch,
-                        optimizer.param_groups[0]["lr"],
-                    )
-                    for k, v in losses.items():
-                        str_out += "  %s loss: %.4f," % (k, v.item())
-                    str_out += "  total loss: %.4f," % loss.item()
+                    #wandb.log({'prediction module loss':predictor_loss})
+                
+                    if cp.t % 50 == 0:
+                        print('{} predictor_loss: {}'.format(cp.t, predictor_loss))
 
-                    # memory allocaged
-                    if torch.cuda.is_available():
-                        max_mem_mb = torch.cuda.max_memory_allocated() / 1024.0 / 1024.0
-                        str_out += " mem: %d" % max_mem_mb
+                    #Save checkpoint every t iteration
+                    if cp.t % 500 == 0:
+                        print('Saving loss prediction module at iter {}'.format(cp.t))
+                        os.makedirs('./output_prediction_module', exist_ok=True)
+                        torch.save(loss_predictor.state_dict(), './output_prediction_module/prediction_module_'+str(cp.t)+'.pth')
 
-                    if len(meshes_pred) > 0:
-                        mean_V = meshes_pred[-1].num_verts_per_mesh().float().mean().item()
-                        mean_F = meshes_pred[-1].num_faces_per_mesh().float().mean().item()
-                        str_out += ", mesh size = (%d, %d)" % (mean_V, mean_F)
-                    logger.info(str_out)
-
-                # Log with Weights & Biases, comment out if not installed
-                #wandb.log(losses)
-
-            if loss_moving_average is None and loss is not None:
-                loss_moving_average = loss.item()
-
-            '''
-            # Skip backprop for this batch if the loss is above the skip factor times
-            # the moving average for losses
-            if loss is None:
-                pass
-            elif loss.item() > cfg.SOLVER.SKIP_LOSS_THRESH * loss_moving_average:
-                logger.info("Warning: Skipping loss %f on GPU %d" % (loss.item(), comm.get_rank()))
-                cp.store_metric(losses_skipped=loss.item())
-                skip = True
-            else:
-                # Update the moving average of our loss
-                gamma = cfg.SOLVER.LOSS_SKIP_GAMMA
-                loss_moving_average *= gamma
-                loss_moving_average += (1.0 - gamma) * loss.item()
-                cp.store_data("loss_moving_average", loss_moving_average)
-
-            if skip:
-                logger.info("Dummy backprop on GPU %d" % comm.get_rank())
-                loss = 0.0 * sum(p.sum() for p in params)
-
-            # Backprop and step
-            scheduler.step()
-            optimizer.zero_grad()
-            with Timer("Backward"):
-                loss.backward()
-
-            # When training with normal loss, sometimes I get NaNs in gradient that
-            # cause the model to explode. Check for this before performing a gradient
-            # update. This is safe in mult-GPU since gradients have already been
-            # summed, so each GPU has the same gradients.
-            num_infinite_grad = 0
-            for p in params:
-                if p.requires_grad == False or p.grad is None:
-                    continue 
-                num_infinite_grad += (torch.isfinite(p.grad) == 0).sum().item()
-            if num_infinite_grad == 0:
-                optimizer.step()
-            else:
-                msg = "WARNING: Got %d non-finite elements in gradient; skipping update"
-                logger.info(msg % num_infinite_grad)
-            '''
             cp.step()
 
             if cp.t % cfg.SOLVER.CHECKPOINT_PERIOD == 0:
