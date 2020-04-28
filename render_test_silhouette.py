@@ -20,6 +20,7 @@ from pytorch3d.renderer import (
     MeshRenderer, 
     MeshRasterizer, 
     SoftSilhouetteShader,
+    HardPhongShader,
     BlendParams
 )
 
@@ -29,7 +30,7 @@ from shapenet.utils.coords import SHAPENET_MAX_ZMAX, SHAPENET_MIN_ZMIN, project_
 device = torch.device("cuda:0")
 torch.cuda.set_device(device)
 sid = '02958343'
-mid = '4856ef1e80d356d111f983eb293b51a'
+mid = '8a49ece1b6d0b24dafe1d4530f4c6e24'
 DATA_DIR = "./datasets/shapenet/ShapeNetCore.v1/"+sid+"/"+mid
 
 metadata_path = os.path.join('./datasets/shapenet/ShapeNetV1processed', sid, mid, "metadata.pt")
@@ -55,6 +56,8 @@ rot_x_n90 = torch.tensor([[1, 0, 0, 0],
                             [0, 0, 0, 1]]).to(RTs) 
 
 
+invRT = torch.inverse(RTs[10].mm(rot_y_90))
+invRT_no_rot = torch.inverse(RTs[0]) 
 #Comment/uncomment GT .obj, Predicted Mesh, or GT Mesh to see plots for them
 
 ###########GT .obj
@@ -68,22 +71,18 @@ faces = faces_idx.verts_idx
 
 ##########Predicted Mesh
 #Generate this by running: python demo/demo_modified.py --config-file configs/shapenet/voxmesh_R50.yaml --data_dir datasets/shapenet/ShapeNetV1processed --output output_demo --checkpoint shapenet://voxmesh_R50.pth --index 0
-obj_filename = './output_demo/results_shapenet/02958343-4856ef1e80d356d111f983eb293b51a-00.obj'
+'''
+obj_filename = './output_demo/results_shapenet/02958343-8a49ece1b6d0b24dafe1d4530f4c6e24-10.obj'
 
 verts, faces_idx, _ = load_obj(obj_filename)
 faces = faces_idx.verts_idx
-invRT = torch.inverse(RTs[0].mm(rot_y_90))
-#invRT = torch.inverse(RTs[0].mm(rot_x_n90)) 
-#invRT = torch.inverse(RTs[0]) 
-verts = project_verts(verts, invRT.cpu())
+#verts = project_verts(verts, invRT.cpu())
+'''
 
 ##########GT Mesh 
-'''
 mesh_path = os.path.join('./datasets/shapenet/ShapeNetV1processed', sid, mid, "mesh.pt")
 mesh_data = torch.load(mesh_path)
 verts, faces = mesh_data["verts"], mesh_data["faces"]
-verts = project_verts(verts, RTs[0].cpu())
-'''
 
 verts_rgb = torch.ones_like(verts)[None] 
 textures = Textures(verts_rgb=verts_rgb.to(device))
@@ -110,9 +109,21 @@ raster_settings = RasterizationSettings(
     faces_per_pixel=50, 
 )
 
+from matplotlib import gridspec
+
 batch_size = 6
-plt.figure(figsize=(10, 10))
-plt.title('R2N2 transformation settings')
+#fig = plt.figure(figsize=(8,8))
+#ax = [fig.add_subplot(5,5,i+1) for i in range(24)]
+nrow = 5
+ncol = 5
+
+fig = plt.figure(figsize=(ncol+1, nrow+1)) 
+
+gs = gridspec.GridSpec(nrow, ncol,
+         wspace=0.015, hspace=0.015, 
+         top=1.-0.5/(nrow+1), bottom=0.5/(nrow+1), 
+         left=0.5/(ncol+1), right=1-0.5/(ncol+1)) 
+
 #import pdb; pdb.set_trace()
 for i, (azim, elev, dist) in enumerate(metadata):
     R, T = look_at_view_transform(dist=dist, elev=elev, azim=-azim, device=device)
@@ -126,41 +137,13 @@ for i, (azim, elev, dist) in enumerate(metadata):
         shader=SoftSilhouetteShader(blend_params=blend_params)
     )
 
-    image = renderer(meshes_world=mesh, R=R, T=T)
-    plt.subplot(5,5,i+1)
-    plt.title(str(i).zfill(2)+'.png')
-    plt.imshow(image.squeeze()[ ..., 3].cpu().numpy())
+    image = (renderer(meshes_world=mesh, R=R, T=T)>0).float()
 
+    ax= plt.subplot(gs[i])
+    ax.imshow(image.squeeze()[ ..., 3].cpu().numpy())
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.axis('off')
+
+#fig.subplots_adjust(wspace=0, hspace=0)
 plt.show()
-
-batch_size = 4
-elev_all = torch.linspace(0, 180, batch_size)
-azim_all = torch.linspace(-180, 180, batch_size)
-i = 1
-lights = PointLights(device=device, location=[[0.0, 0.0, -3.0]])
-raster_settings = RasterizationSettings(
-    image_size=512, 
-    blur_radius=0.0, 
-    faces_per_pixel=1, 
-    bin_size=0
-)
-for elev in elev_all:
-    for azim in azim_all:
-        R, T = look_at_view_transform(dist=1.5, elev=elev, azim=azim,device=device)
-        cameras = OpenGLPerspectiveCameras(device=device, R=R, T=T)
-        renderer = MeshRenderer(
-            rasterizer=MeshRasterizer(
-            cameras=cameras, 
-            raster_settings=raster_settings
-            ),
-            shader=HardPhongShader(device=device, lights=lights)
-        )
-        image = renderer(meshes_world=mesh, R=R, T=T)
-
-        print('azim: {}, elev: {}'.format(azim, elev))
-        plt.subplot(5,5,i)
-        plt.imshow(image[0, ..., :3].cpu().numpy())
-
-        i += 1
-plt.show()
-
