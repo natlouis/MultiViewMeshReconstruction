@@ -9,6 +9,8 @@ from utils.binvox_visualization import get_volume_views
 import utils.data_transforms
 import utils.data_loaders 
 
+from utils.binvox_rw import read_as_3d_array
+
 from models.encoder import Encoder
 from models.decoder import Decoder
 from models.refiner import Refiner
@@ -29,12 +31,14 @@ import cv2
 logger = logging.getLogger("demo")
 
 
-class Visualization_demo():
+class Quantitative_analysis_demo():
     def __init__(self, cfg, output_dir):
         self.encoder = Encoder(cfg)
         self.decoder = Decoder(cfg)
         self.refiner = Refiner(cfg)
         self.merger = Merger(cfg)
+        self.thresh = cfg.VOXEL_THRESH
+        self.th = cfg.TEST.VOXEL_THRESH
         
         checkpoint = torch.load(cfg.CHECKPOINT)
         encoder_state_dict = clean_state_dict(checkpoint['encoder_state_dict'])
@@ -48,31 +52,29 @@ class Visualization_demo():
             merger_state_dict = clean_state_dict(checkpoint['merger_state_dict'])
             self.merger.load_state_dict(merger_state_dict)
         
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
         self.output_dir = output_dir
         
 
-    def run_on_images(self,imgs, sid, mid, iid, sampled_idx):
-        dir1 = os.path.join(output_dir,str(sid),str(mid))
+    def calculate_iou(self,imgs,GT_voxels,sid, mid, iid, sampled_idx):
+        dir1 = os.path.join(self.output_dir,str(sid),str(mid))
         if not os.path.exists(dir1):
             os.makedirs(dir1)
-            
-        deprocess = imagenet_deprocess(rescale_image=False)
+        
         image_features = self.encoder(imgs)
         raw_features, generated_volume = self.decoder(image_features)
         generated_volume = self.merger(raw_features, generated_volume)
         generated_volume = self.refiner(generated_volume)
         generated_volume = generated_volume.squeeze()
-        img = image_to_numpy(deprocess(imgs[0][0]))
-        save_img = os.path.join(dir1, "%02d.png" % (iid))
-#         cv2.imwrite(save_img, img[:, :, ::-1])
-        cv2.imwrite(save_img, img)
-        img1 = image_to_numpy(deprocess(imgs[0][1]))
-        save_img1 = os.path.join(dir1, "%02d.png" % (sampled_idx))
-        cv2.imwrite(save_img1, img1)
-#         cv2.imwrite(save_img1, img1[:, :, ::-1])
-        get_volume_views(generated_volume, dir1, iid, sampled_idx)
+        
+        sample_iou = []
+        for th in self.th:
+            _volume = torch.ge(generated_volume, th).float()
+            intersection = torch.sum(_volume.mul(GT_voxels)).float()
+            union = torch.sum(torch.ge(_volume.add(GT_voxels), 1)).float()
+            sample_iou.append((intersection / union).item())
+        return sample_iou
+
+        
        
         
         
@@ -92,6 +94,7 @@ def get_parser():
     parser.add_argument("--index")
     parser.add_argument("--output_dir")
     parser.add_argument("--next_best_view", default=None)
+    parser.add_argument("--voxel_dir")
     return parser
 
 
@@ -101,11 +104,14 @@ if __name__ == "__main__":
     logger.info("Arguments: " + str(args))
     
     cfg.CHECKPOINT = args.checkpoint
+    cfg.VOXEL_THRESH = float(args.thresh)
+                        
     data_dir = args.data_dir
     idx = int(args.index)
     output_dir = args.output_dir
     
     dataset = ShapeNetDataset(cfg, data_dir)
+  
     item = dataset[idx] # img, verts, faces, points, normals, voxels, P, _imgs, render_RTs, RT, sid, mid, iid
     img = item[0].squeeze()
     imgs = item[7]
@@ -119,9 +125,20 @@ if __name__ == "__main__":
     sid = item[-3]
     mid = item[-2]
     iid = 24
+    P = item[6]
+#      voxel_coords = item[5]
+#     GT_voxels = dataset._voxelize(voxel_coords, P)
+#     GT_voxels = GT_voxels.float()
+    voxel_dir = args.voxel_dir
+    voxel_path = os.path.join(voxel_dir,sid,mid,'model.binvox')
+    with open(voxel_path, 'rb') as f:
+        volume = utils.binvox_rw.read_as_3d_array(f)
+        GT_voxels = volume.data.astype(np.float32)
+    GT_voxels = torch.tensor(GT_voxels)
+    demo = Quantitative_analysis_demo(cfg, output_dir=output_dir)
+    calculated_iou = demo.calculate_iou(imgs, GT_voxels, sid, mid, iid, sampled_idx)
+    print(calculated_iou)
+
     
-    demo = Visualization_demo(cfg, output_dir=output_dir)
-    demo.run_on_images(imgs, sid, mid, iid, sampled_idx)
-    logger.info("Reconstruction saved in %s" % (args.output_dir))
     
-    
+

@@ -10,7 +10,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits import mplot3d
 
 
-def get_volume_views(volume, save_dir, n_itr):
+def get_volume_views(volume, save_dir, idx1, idx2):
 #     if not os.path.exists(save_dir):
 #         os.makedirs(save_dir)
 
@@ -22,7 +22,7 @@ def get_volume_views(volume, save_dir, n_itr):
 #     ax.scatter((1, 2), (1, 1.2), (1, 2)) 
     ax.voxels(volume, edgecolor="k")
 
-    save_path = os.path.join(save_dir, 'voxels-%06d.png' % n_itr)
+    save_path = os.path.join(save_dir, 'voxels-%02d-%02d.png' % (idx1, idx2))
     plt.savefig(save_path, bbox_inches='tight')
     plt.close()
     return cv2.imread(save_path)

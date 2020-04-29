@@ -15,6 +15,7 @@ import utils.data_transforms
 
 import cv2
 import numpy as np
+from shapenet_utils.coords import SHAPENET_MAX_ZMAX, SHAPENET_MIN_ZMIN, project_verts
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,9 @@ class ShapeNetDataset(Dataset):
         self.image_ids = []
         self.mid_to_samples = {}
         self.mid_to_idx = {} #each entry holds a list of indices that belong to that model
-
+        
+        self.rendering_dir = './ShapeNetRenderingExtrinsics'
+        
 #         self.transform = T.Compose([T.Resize(input_size), 
 #                                     T.ToTensor(), 
 #                                     imagenet_preprocess()])
@@ -89,20 +92,20 @@ class ShapeNetDataset(Dataset):
                         samples = torch.load(samples_path)
                         self.mid_to_samples[mid] = samples
 
-                    self.mid_to_idx[mid] = []
+                    self.mid_to_idx[sid+'_'+mid] = []
                     for iid in range(num_imgs):
                         if allowed_iids is None or iid in allowed_iids:
                             self.synset_ids.append(sid)
                             self.model_ids.append(mid)
                             self.image_ids.append(iid)
-                            self.mid_to_idx[mid].append(len(self.image_ids)-1)
+                            self.mid_to_idx[sid+'_'+mid].append(len(self.image_ids)-1)
                             
 
     def __len__(self):
         return len(self.synset_ids)
      
     # Note: now just random select two imgs
-    def __getitem__(self, idx, next_view_idx = None):
+    def __getitem__(self, idx):
         sid = self.synset_ids[idx]
         mid = self.model_ids[idx]
         iid = self.image_ids[idx]
@@ -114,49 +117,41 @@ class ShapeNetDataset(Dataset):
         RT = metadata["extrinsics"][iid]
         img_path = metadata["image_list"][iid]
         img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
-        
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 255
-        # Load the image
-#         with open(img_path, "rb") as f:
-#             img = Image.open(f).convert("RGB")
-#         img = self.transform(img)
+        img = self.transform([img])
+        # All other rendered images for this model. Needed for "viewgrid"
+        _iids = [self.image_ids[i] for i in self.mid_to_idx[sid+'_'+mid] if i != idx]
+        _imgs = []
+        for _iid in _iids:
+            img_path = metadata["image_list"][_iid]
+            img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
+            _img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 255
+            _imgs.append(_img)     
+        _imgs = self.transform(_imgs) # N x C x H x W
+#         print(_imgs.shape)
+#         _imgs = torch.stack(_imgs) # N x C x H x W
 
-        # All other images for this model
-        _iids = [self.image_ids[i] for i in self.mid_to_idx[mid] if i != idx]
-#         _imgs = []
-        
-#         num_to_sample = 1 #Number of images to reconstruct beside the current image
-        if next_view_idx is None:
-            sampled_idx = torch.randint(0, len(_iids), size=(1,))
-        else:
-            sampled_idx = next_view_idx
-            
-        _img_path = metadata["image_list"][sampled_idx.item()]
-        _img_path = os.path.join(self.data_dir, sid, mid, "images", _img_path)
-        _img = cv2.imread(_img_path, cv2.IMREAD_UNCHANGED).astype(np.float32) / 255
-        
-#         with open(_img_path, "rb") as f:
-#             _img = Image.open(f).convert("RGB")
-#             _img = self.transform(_img)
-#         imgs = torch.stack([img,_img]) # tensor([2,3,224,224])
-        imgs = []
-        imgs.append(img)
-        imgs.append(_img)
+        #Zero pad so N = 23. 24 images minus the current image
+        N, C, H, W = _imgs.shape
+#         n = 23
+#         d = 0
+#         if len(_imgs) < n:
+#             d = n - len(_imgs)
+#             _imgs = torch.cat((_imgs, torch.zeros(d,C,H,W)))
 
-        imgs = self.transform(imgs)
-        
-        
-#         for _iid in sampled_idxs:
-#             img_path = metadata["image_list"][_iid]
-#             img_path = os.path.join(self.data_dir, sid, mid, "images", img_path)
+#         #Mask for zero-padded images. 1 for valid image, 0 for zero image
+#         mask = torch.cat((torch.ones(N), torch.zeros(d)))
 
-#             with open(img_path, "rb") as f:
-#                 _img = Image.open(f).convert("RGB")
-#             _imgs.append(self.transform(_img))
-#         _imgs = torch.stack(_imgs)
-#         _imgs = torch.cat((img.unsqueeze(0), _imgs))# tensor([N,3,224,224]) where N = num_to_sample+1
+        #Get transformation matrices to view renderings from same camera position
+        render_metadata_path = os.path.join(self.rendering_dir, sid, mid, 'rendering_metadata.pt')
+        render_metadata = torch.load(render_metadata_path)
+        render_RTs = render_metadata['extrinsics']
         
-        
+        #Only keep matrices for all "other" images
+        idxs = torch.arange(N+1)
+        keep = (idxs != iid)
+        render_RTs = render_RTs[keep] # N x 3 x 4
+
         # Maybe read mesh
         verts, faces = None, None
 #         if self.return_mesh:
@@ -194,8 +189,8 @@ class ShapeNetDataset(Dataset):
                 voxels = voxel_data["voxel_coords"]
                 P = K.mm(RT)
 
-        id_str = "%s-%s-%02d" % (sid, mid, iid)
-        return img, verts, faces, points, normals, voxels, P, id_str, imgs, sid, mid, iid, sampled_idx
+#         id_str = "%s-%s-%02d" % (sid, mid, iid)
+        return img, verts, faces, points, normals, voxels, P, _imgs, render_RTs, RT, sid, mid, iid
 
     def _voxelize(self, voxel_coords, P):
         V = self.voxel_size
