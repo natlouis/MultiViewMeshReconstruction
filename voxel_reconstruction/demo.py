@@ -25,6 +25,9 @@ from detectron2.utils.logger import setup_logger
 
 import cv2
 
+from pytorch3d.ops import cubify
+from pytorch3d.io import save_obj
+# from shapenet.utils.coords import get_blender_intrinsic_matrix, voxel_to_world
 
 logger = logging.getLogger("demo")
 
@@ -63,6 +66,13 @@ class Visualization_demo():
         raw_features, generated_volume = self.decoder(image_features)
         generated_volume = self.merger(raw_features, generated_volume)
         generated_volume = self.refiner(generated_volume)
+
+        mesh = cubify(generated_volume, 0.3)
+#         mesh = voxel_to_world(meshes)
+        save_mesh = os.path.join(dir1, "%s_%s.obj" % (iid, sampled_idx))
+        verts, faces = mesh.get_mesh_verts_faces(0)
+        save_obj(save_mesh, verts, faces)
+        
         generated_volume = generated_volume.squeeze()
         img = image_to_numpy(deprocess(imgs[0][0]))
         save_img = os.path.join(dir1, "%02d.png" % (iid))
@@ -73,6 +83,8 @@ class Visualization_demo():
         cv2.imwrite(save_img1, img1)
 #         cv2.imwrite(save_img1, img1[:, :, ::-1])
         get_volume_views(generated_volume, dir1, iid, sampled_idx)
+        
+       
        
         
         
