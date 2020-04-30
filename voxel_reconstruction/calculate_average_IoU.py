@@ -116,6 +116,7 @@ if __name__ == "__main__":
     model_num = int(synset_ids.count(synset_id)/24)
     
     sample_size = int(args.sample_size)
+    torch.manual_seed(0)
     idx_list = torch.randint(0, model_num, size=(sample_size,))
     idx_list += first_idx
     
@@ -125,7 +126,7 @@ if __name__ == "__main__":
         img = item[0].squeeze()
         imgs = item[7]
         if args.next_best_view:
-            sampled_idx = int(args.next_best_view)
+            sampled_idx = int(args.next_best_view[idx])
         else:
             sampled_idx = torch.randint(0, 23, size=(1,)).item()
         sampled_img = imgs[sampled_idx]
