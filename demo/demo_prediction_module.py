@@ -13,8 +13,8 @@ from pytorch3d.structures import Meshes, Textures
 
 from fvcore.common.file_io import PathManager
 
-#from shapenet.data.mesh_vox import MeshVoxDataset
-from shapenet.data.mesh_vox_multi import MeshVoxMultiDataset
+from shapenet.data.mesh_vox import MeshVoxDataset
+# from shapenet.data.mesh_vox_multi import MeshVoxMultiDataset
 from shapenet.modeling.mesh_arch import VoxMeshHead
 from shapenet.utils import clean_state_dict 
 import shapenet.utils.vis as vis_utils 
@@ -58,14 +58,14 @@ class VisualizationDemo(object):
 
         self.loss_predictor = LossPredictionModule()
         #Path to trained prediction module
-        state_dict = torch.load('./output_prediction_module/lr1e-4/prediction_module_1500.pth', map_location='cuda:0')
+        state_dict = torch.load('prediction_module_1500.pth', map_location='cuda:0')
         self.loss_predictor.load_state_dict(state_dict)
 
         self.predictor.to(self.device)
         self.loss_predictor.to(self.device)
         os.makedirs(output_dir, exist_ok=True)
         self.output_dir = output_dir
-
+ 
       def run_on_image(self, image, id_str, gt_verts, gt_faces):
         deprocess = imagenet_deprocess(rescale_image=False)
 
@@ -179,6 +179,7 @@ class VisualizationDemo(object):
         plt.show()
         #plt.savefig('./output_demo/figures/'+id_str+'.png')
         #vis_utils.visualize_prediction(id_str, img, mesh, self.output_dir)
+        return torch.argmax(probability_map).item()
 
 def setup_cfg(args):
     cfg = get_shapenet_cfg()
@@ -196,11 +197,12 @@ def get_parser():
         help="path to config file",
     )
     parser.add_argument("--data_dir", help="A directory for input images")
-    parser.add_argument("--index", help="The index of the input image")
     
     parser.add_argument("--output", help="A directory to save output visualizations")
     
     parser.add_argument("--checkpoint",help="A path to a checkpoint file")
+    parser.add_argument("--synset_id", default="04530566")
+    parser.add_argument("--sample_size")
     
     return parser
 
@@ -219,15 +221,20 @@ if __name__ == "__main__":
 
 #     data_dir = './datasets/shapenet/ShapeNetV1processed'
     data_dir = args.data_dir
-    #dataset = MeshVoxDataset(data_dir, return_mesh=True)
-    dataset = MeshVoxMultiDataset(data_dir, return_mesh=True)
-
-    for _ in range(10):
-        #Randomly select an image from the ShapeNet dataset if index args is empty
-        if args.index is None:
-            idx = np.random.randint(len(dataset))
-        else:
-            idx = int(args.index)
+    dataset = MeshVoxDataset(data_dir, return_mesh=True)
+    
+    synset_ids = dataset.synset_ids
+    first_idx = synset_ids.index(synset_id)
+    model_num = int(synset_ids.count(synset_id)/24)
+    
+    sample_size = int(args.sample_size)
+    torch.manual_seed(0)
+    idx_list = torch.randint(0, model_num, size=(sample_size,))
+    idx_list += first_idx
+    
+    
+    prediction_idx = []
+    for idx in idx_list:
 
         item = dataset[idx] #(img, verts, faces, points, normals, voxels, P, id_str)
         img = item[0].unsqueeze(0)
@@ -240,4 +247,5 @@ if __name__ == "__main__":
         #RT    = item[10]
 
         prediction = demo.run_on_image(img, id_str, verts, faces)
-    logger.info("Predictions saved in %s" % (args.output))
+        prediction_idx.append(prediction)
+    print(prediction_idx)
