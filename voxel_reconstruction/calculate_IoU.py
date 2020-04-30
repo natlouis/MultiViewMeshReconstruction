@@ -37,7 +37,7 @@ class Quantitative_analysis_demo():
         self.decoder = Decoder(cfg)
         self.refiner = Refiner(cfg)
         self.merger = Merger(cfg)
-        self.thresh = cfg.VOXEL_THRESH
+#         self.thresh = cfg.VOXEL_THRESH
         self.th = cfg.TEST.VOXEL_THRESH
         
         checkpoint = torch.load(cfg.CHECKPOINT)
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     logger.info("Arguments: " + str(args))
     
     cfg.CHECKPOINT = args.checkpoint
-    cfg.VOXEL_THRESH = float(args.thresh)
+#     cfg.VOXEL_THRESH = float(args.thresh)
                         
     data_dir = args.data_dir
     idx = int(args.index)
